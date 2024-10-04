@@ -1,7 +1,8 @@
 ###
 # python=3.8.5
-# version=0.0.1
+# version=0.0.2
 # workspace_root=$(project_root)
+# This shit version is in a MASS!
 ###
 
 import pandas as pd
@@ -9,16 +10,20 @@ import numpy as np
 import plotly.graph_objs as go
 
 # Load the Excel file
-file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx"  # Update this to the correct file path
+# file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx"  # Update this to the correct file path
+file_path = "./output.xlsx"  # Update this to the correct file path
 df = pd.read_excel(file_path)
 
 # Filter the data for only the first 5 loops (圈数 <= 5)
-loops_data = df[df["圈数"] <= 5].reset_index(drop=True)
+loops_data = df[df["圈数"] <= 10].reset_index(drop=True)
 
 # Convert spherical coordinates to Cartesian coordinates
 r = loops_data["斜距(m)"]
 theta = np.deg2rad(loops_data["方位角（°）"])  # Convert degrees to radians
 phi = np.deg2rad(loops_data["俯仰角（°）"])  # Convert degrees to radians
+
+# -----------------------
+# 这一部分好像并没有用
 
 # Calculate Cartesian coordinates
 x = r * np.cos(theta) * np.cos(phi)
@@ -28,13 +33,27 @@ z = r * np.sin(phi)
 # Prepare the data for KNN clustering
 xyz_data = np.vstack((x, y, z)).T
 
+# -----------------------
+
 # Create a color map for each loops
-colors = ["red", "blue", "green", "orange", "purple"]
+# colors = ["red", "green", "blue", "orange", "purple"]
+colors = [
+    "#FF0000",  # Red
+    "#00FF00",  # Green
+    "#0000FF",  # Blue
+    "#00FFFF",  # Cyan
+    "#FF00FF",  # Magenta
+    "#FFFF00",  # Yellow
+    "#000000",  # Black
+    "#FFFFFF",  # White
+    "#808080",  # Gray
+    "#FFA500",  # Orange
+]
 
 # Create traces for each cluster
 traces = []
 
-total_loops = 1 # for there is only 5 colors, this variable should be <=5
+total_loops = 10 # for there is only 5 colors, this variable should be <=5
 # Loop over the first ${total_loops} and create a separate trace for each
 for loop_number in range(1, total_loops + 1):
     loop_data = loops_data[loops_data["圈数"] == loop_number]
@@ -49,6 +68,8 @@ for loop_number in range(1, total_loops + 1):
     y = r * np.sin(theta) * np.cos(phi)
     z = r * np.sin(phi)
 
+    next_state = np.vstack((x, y, z)).T
+    
     # Create a 3D scatter plot trace for this loop
     if total_loops == 1:
         marker_dict = dict(size=5, color=r, opacity=0.8)
@@ -62,9 +83,9 @@ for loop_number in range(1, total_loops + 1):
         marker=marker_dict,
         name=f"Loop {loop_number}",
         text=[
-            f"Loop: {loop_number}<br>Range: {dist}m<br>Azimuth: {azim}°<br>Pitch: {pitch}°"
-            for dist, azim, pitch in zip(
-                r, loop_data["方位角（°）"], loop_data["俯仰角（°）"]
+            f"Loop: {loop_number}<br>Range: {dist}m<br>Azimuth: {azim}°<br>Pitch: {pitch}°<br>({x_i, y_i, z_i})"
+            for dist, azim, pitch, x_i, y_i, z_i in zip(
+                r, loop_data["方位角（°）"], loop_data["俯仰角（°）"], x, y, z
             )
         ],
         hoverinfo="text",
