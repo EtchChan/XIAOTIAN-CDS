@@ -10,18 +10,31 @@ import numpy as np
 import plotly.graph_objs as go
 
 # Load the Excel file
-file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据3-公开提供.xlsx"  # Update this to the correct file path
-# file_path = "./output.xlsx"  # Update this to the correct file path
-# file_path = "./output2.xlsx"  # Update this to the correct file path
+# file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx"  # Update this to the correct file path
+# file_path = "./output/output.xlsx"  # Update this to the correct file path
+# file_path = "./output/output2.xlsx"  # Update this to the correct file path
+# file_path = "./output/output3.xlsx"  # Update this to the correct file path
+file_path = "./output/kalman_results_dataset1.xlsx"
+# file_path = "./output/kalman_results_dataset2.xlsx"
+# file_path = "./output/kalman_results_dataset3.xlsx"
+plot_title = "点迹数据-1，群规模为：1"
 df = pd.read_excel(file_path)
 
 # Filter the data for only the first 5 loops (圈数 <= 5)
-loops_data = df[df["圈数"] <= 50].reset_index(drop=True)
+# 圈数超过表格中最大圈数则代表所有圈数均进行处理
+loops_data = df[df["圈数"] <= 400].reset_index(drop=True)
 
 # Convert spherical coordinates to Cartesian coordinates
 r = loops_data["斜距(m)"]
 theta = np.deg2rad(loops_data["方位角（°）"])  # Convert degrees to radians
 phi = np.deg2rad(loops_data["俯仰角（°）"])  # Convert degrees to radians
+
+# 找到轨迹列中出现次数最多的10个轨迹
+top_10_trajectories = df["轨迹ID"].value_counts().head(10)
+print("Top 10 trajectories: ", top_10_trajectories)
+
+# 转成numpy
+top_10_trajectories = np.array([top_10_trajectories.index, top_10_trajectories.values]).T
 
 # -----------------------
 # 这一部分好像并没有用
@@ -39,7 +52,8 @@ xyz_data = np.vstack((x, y, z)).T
 # Create a color map for each loops
 # colors = ["red", "green", "blue", "orange", "purple"]
 colors = [
-    "#FF0000",  # Red
+    # "#FF0000",  # Red
+    "#00A5FF",  # ?
     "#00FF00",  # Green
     "#0000FF",  # Blue
     "#00FFFF",  # Cyan
@@ -54,15 +68,16 @@ colors = [
 # Create traces for each cluster
 traces = []
 
-total_loops = 50  # for there is only 5 colors, this variable should be <=5
+# total_loops = 10  # for there is only 5 colors, this variable should be <=5
 # Loop over the first ${total_loops} and create a separate trace for each
-for loop_number in range(1, total_loops + 1):
-    loop_data = loops_data[loops_data["圈数"] == loop_number]
+for id in range(10):
+    loop_data = loops_data[loops_data["轨迹ID"] == top_10_trajectories[id][0]]
 
     # Convert spherical coordinates to Cartesian coordinates
     r = loop_data["斜距(m)"]
     theta = np.deg2rad(loop_data["方位角（°）"])  # Convert degrees to radians
     phi = np.deg2rad(loop_data["俯仰角（°）"])  # Convert degrees to radians
+    loop_index = loop_data["圈数"]
     # id = loop_data["轨迹ID"]
 
     # Calculate Cartesian coordinates
@@ -73,23 +88,25 @@ for loop_number in range(1, total_loops + 1):
     next_state = np.vstack((x, y, z)).T
 
     # Create a 3D scatter plot trace for this loop
-    if total_loops == 1:
-        marker_dict = dict(size=5, color=r, opacity=0.8)
-    elif total_loops > 10:
-        marker_dict = dict(size=5, color=r, opacity=0.8)
-    else:
-        marker_dict = dict(size=5, color=colors[loop_number - 1], opacity=0.8)
+
+    marker_dict = dict(size=5, color=colors[id], opacity=0.8)
     trace = go.Scatter3d(
         x=x,
         y=y,
         z=z,
         mode="markers",
         marker=marker_dict,
-        name=f"Loop {loop_number}",
+        name=f"id: {id}",
         text=[
             f"Loop: {loop_number}<br>Range: {dist}m<br>Azimuth: {azim}°<br>Pitch: {pitch}°<br>({x_i, y_i, z_i})"
-            for dist, azim, pitch, x_i, y_i, z_i in zip(
-                r, loop_data["方位角（°）"], loop_data["俯仰角（°）"], x, y, z
+            for loop_number, dist, azim, pitch, x_i, y_i, z_i in zip(
+                loop_index,
+                r,
+                loop_data["方位角（°）"],
+                loop_data["俯仰角（°）"],
+                x,
+                y,
+                z,
             )
         ],
         hoverinfo="text",
@@ -123,7 +140,7 @@ traces.extend([azimuth_line, pitch_line])
 
 # Create the layout for the 3D plot
 layout = go.Layout(
-    title="Radar Data Points with Clustering and Reference Lines",
+    title=plot_title,
     scene=dict(
         xaxis=dict(title="X (meters)"),
         yaxis=dict(title="Y (meters)"),
