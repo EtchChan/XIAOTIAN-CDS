@@ -4,12 +4,13 @@ Brief: This script implement a radar track classifier for drone-discrimination
 
 Author: CHEN Yi-xuan
 
-updateDate: 2024-09-25
+updateDate: 2024-09-27
 """
 import os
 import math
 import numpy as np
 import torch
+from torch.distributed.pipeline.sync.checkpoint import checkpoint
 from torch_geometric.data import Data, Dataset
 from torch_geometric.nn import GATConv
 from torch_geometric.loader import DataLoader
@@ -110,7 +111,13 @@ def load_data(data_path, batch_size=32, test_size=0.2, random_state=42):
     return train_loader, test_loader
 
 
-# Define the GNN model using multi-head GAT
+"""
+/brief: Graph Attention Network (GAT) for node(point in radar track) classification
+
+/author: CHEN Yi-xuan
+
+/date: 2024-09-26
+"""
 class GAT(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, num_classes, num_heads=3):
         super(GAT, self).__init__()
@@ -163,13 +170,15 @@ def save_model_with_index(model, base_filename):
 
         index += 1
 
+        return full_path
+
 
 """
 /brief: train the transformer model
 
 /author: CHEN Yi-xuan
 
-/date: 2024-09-26
+/date: 2024-09-27
 
 /param: train_loader: the data loader for training
         val_loader: the data loader for validation
@@ -189,14 +198,20 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=learning_rate/10.0)
 
-    # training loop
+    # initialize the model for training
     model.train()
+
     # Early stopping parameters
     best_train_acc = 0.0
     best_test_acc = 0.0
     best_combined_acc = 0.0
     best_model = model
     patience = tolerance
+
+    # set up checkpoint for the model in case of breaking down or for further training
+    checkpoint_path = save_model_with_index(model, "checkpoint")
+
+    # Train the model
     for epoch in range(num_epochs):
         train_loss = 0.0 # Accumulate the training loss
         train_correct = 0 # Accumulate the number of correct predictions
@@ -214,6 +229,9 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
             pred = output.argmax(dim=1)
             train_correct += int((pred == data.y).sum())
             train_len += data.y.shape[0]
+
+        # update the checkpoint after each epoch
+        torch.save(model, checkpoint_path)
 
         # Calculate the training accuracy
         train_acc = train_correct / train_len
@@ -262,6 +280,9 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
     # save the best model and final model under the same directory of the script
     save_model_with_index(model,  "final_model")
     save_model_with_index(best_model, "best_model")
+
+    # the training process is done, remove the checkpoint
+    os.remove(checkpoint_path)
 
     return model, best_model
 
