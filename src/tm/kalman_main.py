@@ -9,6 +9,21 @@ import pandas as pd
 import numpy as np
 from pykalman import KalmanFilter
 
+# Function to convert from polar to Cartesian coordinates
+def polar_to_cartesian(r, theta, phi):
+    # Convert polar coordinates (r, theta, phi) to Cartesian coordinates (x, y, z)
+    x = r * np.cos(theta) * np.cos(phi)
+    y = r * np.sin(theta) * np.cos(phi)
+    z = r * np.sin(phi)
+    return x, y, z
+
+# Function to convert from Cartesian to polar coordinates
+def cartesian_to_polar(x, y, z):
+    # Convert Cartesian coordinates (x, y, z) to polar coordinates (r, theta, phi)
+    r = np.sqrt(x**2 + y**2 + z**2)
+    theta = np.arctan2(y, x)
+    phi = np.arctan2(z, np.sqrt(x**2 + y**2))
+    return r, theta, phi
 
 def initialize_kalman_filter():
     # 初始化卡尔曼滤波器，状态包括位置和速度
@@ -142,16 +157,53 @@ def process_point_clouds(kf, loop_data):
 
     return predicted_state
 
+def assign_trajectory_ids(radar_data, distance_threshold=2.5):
+    # Initialize the first trajectory ID
+    current_trajectory_id = 0
+    
+    # Initialize a list to store the trajectory IDs
+    radar_data['轨迹ID'] = np.nan
+    
+    # Loop through the radar data by scan cycles
+    for loop_num in sorted(radar_data['圈数'].unique()):
+        current_frame = radar_data[radar_data['圈数'] == loop_num]
+        
+        if loop_num == min(radar_data['圈数']):  # First loop, assign new IDs
+            radar_data.loc[radar_data['圈数'] == loop_num, '轨迹ID'] = range(current_trajectory_id, current_trajectory_id + len(current_frame))
+            current_trajectory_id += len(current_frame)
+        else:
+            previous_frame = radar_data[radar_data['圈数'] == (loop_num - 1)]
+            
+            for idx, point in current_frame.iterrows():
+                # Convert both frames' points to Cartesian coordinates
+                prev_x, prev_y, prev_z = polar_to_cartesian(previous_frame['斜距(m)'], np.deg2rad(previous_frame['方位角（°）']), np.deg2rad(previous_frame['俯仰角（°）']))
+                curr_x, curr_y, curr_z = polar_to_cartesian(point['斜距(m)'], np.deg2rad(point['方位角（°）']), np.deg2rad(point['俯仰角（°）']))
+                
+                # Compute distances between current point and all points in the previous frame
+                distances = np.sqrt((prev_x - curr_x)**2 + (prev_y - curr_y)**2 + (prev_z - curr_z)**2)
+                
+                # Check if there is a match within the threshold
+                if distances.min() < distance_threshold:
+                    matched_index = distances.argmin()
+                    radar_data.loc[idx, '轨迹ID'] = radar_data.loc[previous_frame.index[matched_index], '轨迹ID']
+                else:
+                    # Assign a new trajectory ID
+                    radar_data.loc[idx, '轨迹ID'] = current_trajectory_id
+                    current_trajectory_id += 1
+
+    return radar_data
+
 
 def process_multiple_frames(loops_data):
 
     # 仅在此初始化滤波器
     kf = initialize_kalman_filter()
 
-    # 初始帧处理，获取初始帧预测
+    # 初始帧处理，获取初始帧预测，预测来源与径向速度
     current_loop_data = loops_data[loops_data["圈数"] == 1]
     current_predictions = process_point_clouds(kf, current_loop_data)
 
+    # combined matched points 存储了从第一帧开始所有的匹配点（第一帧则为所有点）
     combined_matched_points = [current_loop_data]
     # 从第2帧开始循环遍历各帧
     for i in range(2, total_loops + 1):
@@ -176,10 +228,14 @@ if __name__ == "__main__":
     df = pd.read_excel(file_path)
 
     # total processed loops
-    total_loops = 10
+    total_loops = 20
 
     # 选取需要处理的帧
     loops_data = df[df["圈数"] <= total_loops].reset_index(drop=True)
 
     # 多帧处理
-    matched_points = process_multiple_frames(loops_data)
+    # matched_points = process_multiple_frames(loops_data)
+    
+    # 轨迹ID
+    # processed_data = assign_trajectory_ids(loops_data, distance_threshold=100)
+    # processed_data.to_excel("output2.xlsx", index=False)
