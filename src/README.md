@@ -48,6 +48,6 @@ tvm
 ### expriment result
 
 >> see expriment folder 
-![implement_exp](/ExtendedExperiment/res_vis/implement_exp.jpg "this is implement_exp image")
-![tracking_vis](/ExtendedExperiment/res_vis/tracking_vis.png "this is tracking_vis image")
-![yolov11_res](/ExtendedExperiment/res_vis/yolov11_res.png "this is yolov11 training res image")
+![implement_exp](./ExtendedExperiment/res_vis/implement_exp.jpg "this is implement_exp image")
+![tracking_vis](./ExtendedExperiment/res_vis/tracking_vis.png "this is tracking_vis image")
+![yolov11_res](./ExtendedExperiment/res_vis/yolov11_res.png "this is yolov11 training res image")
