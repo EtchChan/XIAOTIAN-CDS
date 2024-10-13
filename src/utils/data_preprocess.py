@@ -1,17 +1,19 @@
 """
 Brief: raw data preprocessing functions set
 Author: alfeak, CHEN Yi-xuan
-updateDate: 2024-09-24
+updateDate: 2024-10-13
 """
 
 import pandas as pd
 import numpy as np
 import os
 import csv
+import matplotlib.pyplot as plt
 
 
 """
 /brief: padding the data to a fixed length.
+
 
 /author: CHEN Yi-xuan
 
@@ -41,6 +43,7 @@ def padding_data_to_fixed_length(data, fixed_length: int):
 /date: 2024-09-24
 
 /param: file_path: str, the path of the UTF-8 CSV file
+        fixed_length: int, the length to be padded to, should be greater than the length of the data
 
 /input: the raw format is as follows:
     azimuth angle, slant range, relative height, radial velocity, record time, RCS, label  # start of track k
@@ -105,14 +108,38 @@ def extract_event_2_data_from_csv(raw_data_path: str, fixed_length: int = -1) ->
     print(f"track total nums: {num_of_tracks}")
     if fixed_length < 0:
         track_length = [x[2] for x in data_track_list]
+        mean_track_length = np.mean(track_length)
         print(f"track min points nums: {min(track_length)}")
         print(f"track max points nums: {max(track_length)}")
-        print(f"track mean points nums: {np.mean(track_length)}")
+        print(f"track mean points nums: {mean_track_length}")
+        # plot a histogram of the length of tracks and mark the mean value on it
+        plt.hist(track_length, bins=20)
+        plt.axvline(x=mean_track_length, color='r', linestyle='--')
+        plt.text(plt.xlim()[1], plt.ylim()[1], f'Mean: {mean_track_length:.2f}',
+                 horizontalalignment='right', verticalalignment='top')
+        plt.title("Event 2: Distribution of the length of tracks")
+        plt.tight_layout()
+        plt.savefig("./event_2_track_length_distribution.png")
+        plt.show()
 
     # show the statistics of the label
     label_list = [x[1] for x in data_track_list]
-    print(f"track label 0 nums: {label_list.count(0)}")
-    print(f"track label 1 nums: {label_list.count(1)}")
+    counts = [label_list.count(0), label_list.count(1)]
+    print(f"not-drone-instance nums: {counts[0]}")
+    print(f"drone-instance nums: {counts[1]}")
+    # plot a bar chart of the distribution of type of instances
+    labels = ['not-drone', 'drone']
+    fig, ax = plt.subplots()
+    bars = ax.bar([0, 1], counts, tick_label=labels)
+
+    # Add labels on top of each bar
+    for i, v in enumerate(counts):
+        ax.text(i, v, str(v), ha='center', va='bottom')
+
+    plt.title("Event 2: Distribution of the type of instances")
+    plt.tight_layout()
+    plt.savefig("./event_2_data_distribution.png")
+    plt.show()
 
     # process data to npy format and print its shape info
     data_track_list = np.array(data_track_list, dtype=object)
@@ -280,4 +307,4 @@ if __name__ == '__main__':
     # dataset_split("pre_expriment","raw_data/track2_droneRegconition.npy",0.2,0.2)
 
     # usage of extract_event_2_data_from_csv
-    extract_event_2_data_from_csv("../../data/event_2/raw_data.csv", fixed_length=15)
+    extract_event_2_data_from_csv("../../data/event_2/raw_data.csv")

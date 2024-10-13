@@ -2,7 +2,7 @@
 Brief: this script using multi-head attention to train a transformer model based on PyTorch
         The model is used for classification task on drone tracking dataset
 Author: CHEN Yi-xuan
-updateDate: 2024-09-24
+updateDate: 2024-10-13
 """
 import os
 import numpy as np
@@ -11,12 +11,15 @@ import torch
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
+import seaborn as sns
+import  matplotlib.pyplot as plt
 
-from ..GNN.GAT_classifier import save_model_with_index
+from src.GNN.GAT_classifier import save_model_with_index
 
 """
 /brief: custom scaler class to conduct normalization on the non-zero values in the data
@@ -228,6 +231,10 @@ def train_model(train_loader, val_loader, num_epochs=30, initial_model = None, l
 
     best_model = model
     best_combined_loss = float('inf')
+
+    # set up checkpoint for the model in case of breaking down or for further training
+    checkpoint_path = str(save_model_with_index(model, "checkpoint"))
+
     # Training loop
     for epoch in range(num_epochs):
         model.train()
@@ -268,10 +275,10 @@ def train_model(train_loader, val_loader, num_epochs=30, initial_model = None, l
             optimizer.step()
 
             # check the model parameters if NaN exists
-            if nan_tag:
-                for name, param in model.named_parameters():
-                    if param.requires_grad:
-                        print(f"{name}: weight mean {param.data.mean()}, grad mean {param.grad.mean()}")
+            # if nan_tag:
+            #     for name, param in model.named_parameters():
+            #         if param.requires_grad:
+            #             print(f"{name}: weight mean {param.data.mean()}, grad mean {param.grad.mean()}")
 
             # calculate the loss and accuracy
             train_loss += loss.item()
@@ -281,6 +288,9 @@ def train_model(train_loader, val_loader, num_epochs=30, initial_model = None, l
         train_loss /= len(train_loader)
         train_accuracy = train_correct / len(train_loader.dataset)
 
+        # update the checkpoint after each epoch
+        borrow_checkpoint_path = checkpoint_path
+        torch.save(model, borrow_checkpoint_path)
 
         # Validation
         model.eval()
@@ -324,6 +334,9 @@ def train_model(train_loader, val_loader, num_epochs=30, initial_model = None, l
     save_model_with_index(model, "final_model")
     save_model_with_index(best_model, "best_model")
 
+    # the training process is done, remove the checkpoint
+    os.remove(str(checkpoint_path))
+
     return model, best_model
 
 
@@ -338,26 +351,84 @@ def train_model(train_loader, val_loader, num_epochs=30, initial_model = None, l
         test_loader: the data loader for testing
 """
 def test_model(model, test_loader):
-    # Test the model
+    # # Test the model
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # model.to(device)
+    # model.eval()
+    # test_correct = 0
+    # with torch.no_grad():
+    #     for batch_features, batch_labels in test_loader:
+    #         batch_features, batch_labels = batch_features.to(device), batch_labels.to(device)
+    #         outputs = model(batch_features)
+    #         _, predicted = torch.max(outputs, 1)
+    #         test_correct += (predicted == batch_labels).sum().item()
+    #
+    # test_accuracy = test_correct / len(test_loader.dataset)
+    #
+    # print(f"Test Accuracy: {test_accuracy:.4f}")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
     model.eval()
-    test_correct = 0
+
+    all_predictions = []
+    all_labels = []
+
     with torch.no_grad():
         for batch_features, batch_labels in test_loader:
             batch_features, batch_labels = batch_features.to(device), batch_labels.to(device)
             outputs = model(batch_features)
             _, predicted = torch.max(outputs, 1)
-            test_correct += (predicted == batch_labels).sum().item()
 
-    test_accuracy = test_correct / len(test_loader.dataset)
-    print(f"Test Accuracy: {test_accuracy:.4f}")
+            all_predictions.extend(predicted.cpu().numpy())
+            all_labels.extend(batch_labels.cpu().numpy())
+
+    # Convert lists to numpy arrays
+    all_predictions = np.array(all_predictions)
+    all_labels = np.array(all_labels)
+
+    # Calculate accuracy
+    accuracy = np.mean(all_predictions == all_labels)
+    print(f"Test Accuracy: {accuracy:.4f}")
+
+    # Calculate precision, recall, and F1 score
+    precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_predictions, average='weighted')
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+
+    # Compute confusion matrix
+    cm = confusion_matrix(all_labels, all_predictions)
+
+    # Plot confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title('Event 2: Confusion Matrix of transformer classifier')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.savefig("./transformer_classifier_confusion_matrix.png")
+    plt.show()
+
+    # Plot confusion matrix with color intensity
+    plt.figure(figsize=(10, 8))
+    cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='YlOrRd')
+    plt.title('Event 2: Normalized Confusion Matrix of transformer classifier')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.savefig("./transformer_classifier_normalized_confusion_matrix.png")
+    plt.show()
 
 
 if __name__ == "__main__":
     train_loader, val_loader, test_loader = load_data("../../data/event_2/raw_data_padded.npy")
-    final_model, best_model = train_model(train_loader, val_loader, num_epochs=200, learning_rate=5e-3)
+    # final_model, best_model = train_model(train_loader, val_loader, num_epochs=200, learning_rate=5e-3)
+
+    print("\n\nFinal model:")
+    final_model = torch.load("./final_model_1.pth")
     test_model(final_model, test_loader)
+
+    best_model = torch.load("./best_model_1.pth")
     print("\n\nBest model:")
     test_model(best_model, test_loader)
 

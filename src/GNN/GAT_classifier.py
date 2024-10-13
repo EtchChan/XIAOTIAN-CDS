@@ -4,13 +4,12 @@ Brief: This script implement a radar track classifier for drone-discrimination
 
 Author: CHEN Yi-xuan
 
-updateDate: 2024-09-27
+updateDate: 2024-10-13
 """
 import os
 import math
 import numpy as np
 import torch
-from torch.distributed.pipeline.sync.checkpoint import checkpoint
 from torch_geometric.data import Data, Dataset
 from torch_geometric.nn import GATConv
 from torch_geometric.loader import DataLoader
@@ -157,11 +156,12 @@ class GAT(torch.nn.Module):
         base_filename: the base filename(description) for the model
 """
 def save_model_with_index(model, base_filename):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Use the current working directory instead of the script directory
+    current_dir = os.getcwd()
     index = 1
     while True:
         filename = f"{base_filename}_{index}.pth"
-        full_path = os.path.join(script_dir, filename)
+        full_path = os.path.join(current_dir, filename)
 
         if not os.path.exists(full_path):
             torch.save(model, full_path)
@@ -209,7 +209,7 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
     patience = tolerance
 
     # set up checkpoint for the model in case of breaking down or for further training
-    checkpoint_path = save_model_with_index(model, "checkpoint")
+    checkpoint_path = str(save_model_with_index(model, "checkpoint"))
 
     # Train the model
     for epoch in range(num_epochs):
@@ -231,7 +231,8 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
             train_len += data.y.shape[0]
 
         # update the checkpoint after each epoch
-        torch.save(model, checkpoint_path)
+        borrow_checkpoint_path = checkpoint_path
+        torch.save(model, borrow_checkpoint_path)
 
         # Calculate the training accuracy
         train_acc = train_correct / train_len
