@@ -17,6 +17,9 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from tqdm import tqdm
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 """
 /brief: custom dataset for drone radar track data used in the GNN model
@@ -35,8 +38,8 @@ class DroneRadarDataset(Dataset):
         return len(self.data)
 
     def get(self, idx):
-        # Each item in self.data is a tuple (track, label)
-        track, label, _ = self.data[idx]
+        # Each item in self.data is a tuple (track, label, len)
+        track, label, track_len = self.data[idx]
 
         # deal with the nan values in the data, convert nan to 0
         track = np.array(track)
@@ -299,19 +302,79 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
         test_loader: the data loader for testing
 """
 def test_model(model, test_loader):
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # model = model.to(device)
+    # model.eval()
+    # correct = 0
+    # test_len = 0.0
+    # for data in tqdm(test_loader, desc="Testing"):
+    #     data = data.to(device)
+    #     output = model(data)
+    #     pred = output.argmax(dim=1)
+    #     correct += int((pred == data.y).sum())
+    #     test_len += data.y.shape[0]
+    # print(f"Test Accuracy(Point by Point): {correct / test_len}")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     model.eval()
-    correct = 0
-    test_len = 0.0
+
+    all_graph_preds = []
+    all_graph_labels = []
+
     for data in tqdm(test_loader, desc="Testing"):
         data = data.to(device)
         output = model(data)
-        pred = output.argmax(dim=1)
-        correct += int((pred == data.y).sum())
-        test_len += data.y.shape[0]
-    print(f"Test Accuracy: {correct / test_len}")
-    return correct / test_len
+        node_preds = output.argmax(dim=1)
+
+        # Aggregate node predictions for each graph
+        graph_preds = []
+        graph_labels = []
+        for i in range(data.num_graphs):
+            mask = data.batch == i
+            graph_pred = node_preds[mask].float().mean().item()
+            graph_label = data.y[mask].float().mean().item()
+
+            graph_preds.append(1 if graph_pred >= 0.5 else 0)
+            graph_labels.append(1 if graph_label >= 0.5 else 0)
+
+        all_graph_preds.extend(graph_preds)
+        all_graph_labels.extend(graph_labels)
+
+    # Convert to numpy arrays
+    all_graph_preds = np.array(all_graph_preds)
+    all_graph_labels = np.array(all_graph_labels)
+
+    # Calculate metrics
+    accuracy = (all_graph_preds == all_graph_labels).mean()
+    precision, recall, f1, _ = precision_recall_fscore_support(all_graph_labels, all_graph_preds, average='binary')
+
+    print(f"Graph-level Test Accuracy: {accuracy:.4f}")
+    print(f"Graph-level Precision: {precision:.4f}")
+    print(f"Graph-level Recall: {recall:.4f}")
+    print(f"Graph-level F1 Score: {f1:.4f}")
+
+    # Compute and plot confusion matrix
+    cm = confusion_matrix(all_graph_labels, all_graph_preds)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title('Event 2: Graph-level Confusion Matrix of GAT classifier')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.savefig("./GAT_classifier_confusion_matrix.png")
+    plt.show()
+
+    # Normalized confusion matrix
+    cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='YlOrRd')
+    plt.title('Event 2: Normalized Graph-level Confusion Matrix of GAT classifier')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.savefig("./GAT_classifier_normalized_confusion_matrix.png")
+    plt.show()
+
+    return accuracy, precision, recall, f1
 
 
 if __name__ == '__main__':
