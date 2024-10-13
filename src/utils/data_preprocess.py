@@ -9,11 +9,11 @@ import numpy as np
 import os
 import csv
 import matplotlib.pyplot as plt
+import glob
 
 
 """
 /brief: padding the data to a fixed length.
-
 
 /author: CHEN Yi-xuan
 
@@ -33,6 +33,118 @@ def padding_data_to_fixed_length(data, fixed_length: int):
     data.extend(padding)
 
     return data
+
+
+"""
+/brief: convert polar coordinate to Cartesian coordinate.
+
+/author: CHEN Yi-xuan
+
+/date: 2024-10-13
+"""
+def spherical_to_cartesian(r, azimuth, elevation):
+    """
+    convert polar coordinate to Cartesian coordinate
+
+    Input:
+    :param r: radial component(slant range or radial velocity)
+    :param azimuth: azimuth angle
+    :param elevation: elevation angle
+    :return: x, y, z
+    """
+    azimuth_rad = np.radians(azimuth)
+    elevation_rad = np.radians(elevation)
+    x = r * np.cos(elevation_rad) * np.cos(azimuth_rad)
+    y = r * np.cos(elevation_rad) * np.sin(azimuth_rad)
+    z = r * np.sin(elevation_rad)
+    return x, y, z
+
+
+def extract_event_1_data_from_csv(raw_data_folder: str, fixed_length: int = -1):
+    """
+    extract event_1 data from a CSV file and process it into a numpy array.
+
+    :param raw_data_folder: str, the folder contains the UTF-8 CSV track files
+    :param fixed_length: int, the length to be padded to, should be greater than the length of the data
+    :return: np.ndarray, the processed data
+    """
+    # Check if the raw data folder exists
+    if not os.path.exists(raw_data_folder):
+        raise FileNotFoundError(f"Raw data folder {raw_data_folder} not found")
+    # Get the list of CSV files in the raw data folder
+    raw_data_files = glob.glob(os.path.join(raw_data_folder, 'raw_tracks_*.csv'))
+
+    database_cnt = 1
+    for raw_data_file in raw_data_files:
+        # Read CSV file, skipping the header
+        df = pd.read_csv(raw_data_file, skiprows=1,
+                         names=['Time', 'Slant_range', 'Azimuth_angle', 'Elevation_angle', 'Radial_velocity',
+                                'Num_orbits'])
+
+        # Convert spherical coordinates to Cartesian
+        x, y, z = spherical_to_cartesian(df['Slant_range'], df['Azimuth_angle'], df['Elevation_angle'])
+
+        # Calculate radial velocity components
+        v_x, v_y, v_z = spherical_to_cartesian(df['Radial_velocity'], df['Azimuth_angle'], df['Elevation_angle'])
+
+        # Create new DataFrame with converted data
+        new_df = pd.DataFrame({
+            'Time': df['Time'],
+            'x': x,
+            'y': y,
+            'z': z,
+            'v_radial_x': v_x,
+            'v_radial_y': v_y,
+            'v_radial_z': v_z,
+            'Slant_range': df['Slant_range'],
+            'Azimuth_angle': df['Azimuth_angle'],
+            'Elevation_angle': df['Elevation_angle'],
+            'Radial_velocity': df['Radial_velocity']
+        })
+
+        # save the processed data to a npy file under the same directory as the raw csv data
+        output_file = os.path.splitext(raw_data_file)[0] + '.npy'
+        print(f"Processed {raw_data_file} and saved as {output_file}; total radar points: {len(new_df)}")
+        np.save(output_file, new_df)
+
+
+        # # Group data by revolutions
+        # grouped = new_df.groupby(df['Num_orbits'])
+        #
+        # # Create list to store data grouped by revolutions
+        # radar_image_data = []  # radar data points in one orbit/revolution
+        #                   # shape: [L, 11], contains 11 features after conversion
+        #
+        # # Process each revolution
+        # for _, group in grouped:
+        #     radar_image_data.append(group.values)
+        #
+        # # print the statistics of the number of radar points in each revolution if it is not padded
+        # if fixed_length < 0:
+        #     print(f"min points nums in a radar image: {min([len(x) for x in radar_image_data])}")
+        #     print(f"max points nums in a radar image: {max([len(x) for x in radar_image_data])}")
+        #     print(f"mean points nums in a radar image: {np.mean([len(x) for x in radar_image_data])}")
+        #     # plot a histogram of the number of radar points in each revolution and mark the mean value on it
+        #     plt.hist([len(x) for x in radar_image_data], bins=60)
+        #     plt.axvline(x=np.mean([len(x) for x in radar_image_data]), color='r', linestyle='--')
+        #     plt.text(plt.xlim()[1], plt.ylim()[1] - 1, f'Mean: {np.mean([len(x) for x in radar_image_data]):.2f}',
+        #              horizontalalignment='right', verticalalignment='top')
+        #     # mark the total number of revolutions on the plot
+        #     plt.text(plt.xlim()[1], plt.ylim()[1] - 5, f"Total Revolutions: {len(radar_image_data)}",
+        #              horizontalalignment='right', verticalalignment='top')
+        #     plt.title(f"Event 1 database {database_cnt}: Distribution of radar-point-nums in each revolution")
+        #     fig_path = os.path.splitext(raw_data_file)[0] + '_radar_points_num_distribution_event_1.png'
+        #     plt.tight_layout()
+        #     plt.savefig(fig_path)
+        #     plt.show()
+        #
+        #
+        # # Save data as NumPy file
+        # output_file = os.path.splitext(raw_data_file)[0] + '.npy'
+        # np.save(output_file, np.array(radar_image_data, dtype=object))
+        #
+        # print(f"Processed {raw_data_file} and saved as {output_file}, total revolutions: {len(radar_image_data)}")
+        # database_cnt += 1
 
 
 """
@@ -307,4 +419,7 @@ if __name__ == '__main__':
     # dataset_split("pre_expriment","raw_data/track2_droneRegconition.npy",0.2,0.2)
 
     # usage of extract_event_2_data_from_csv
-    extract_event_2_data_from_csv("../../data/event_2/raw_data.csv")
+    # extract_event_2_data_from_csv("../../data/event_2/raw_data.csv")
+
+    # usage of extract_event_1_data_from_csv
+    extract_event_1_data_from_csv("../../data/event_1/")
