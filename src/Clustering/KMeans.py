@@ -18,7 +18,8 @@ def spherical_to_cartesian(distance, azimuth_deg, elevation_deg):
     return x, y, z
 
 # Step 1: Data Preprocessing
-data = pd.read_csv('../../data/event_1/raw_tracks_3.csv', skiprows=1)
+# data = pd.read_csv('../../data/event_1/raw_tracks_3.csv', skiprows=1)
+data = pd.read_csv('../materials/raw_tracks_1.csv', skiprows=1)
 data.columns = ['time', 'distance', 'azimuth', 'elevation', 'radial_speed', 'circle']
 
 # Step 2: Initial Detection and Clustering
@@ -63,6 +64,7 @@ for i, centroid in enumerate(centroids):
     tracks.append(track)
 
 # Initialize a list to store centers for each circle
+temp_traj = []
 circle_centers = []
 
 # Step 4: Tracking Over Time and Computing Centers
@@ -128,21 +130,32 @@ for circle_number in circles[1:]:
 
     # Store the center position with the circle number
     circle_centers.append((circle_number, center_position))
+    
+    temp_traj.append((circle_number, cartesian_positions[2,:]))
 
 # After processing all circles, you can print or analyze the centers
 for circle_number, center_pos in circle_centers:
     print(f"Circle {circle_number}: Center Position (X, Y, Z) = {center_pos}")
+    
+for circle_number, pos in temp_traj:
+    print(f"Circle {circle_number}: Center Position (X, Y, Z) = {pos}")
 
 # save the centers into csv file for further analysis
 center_df = pd.DataFrame(circle_centers, columns=['circle', 'center_position'])
 # add header to the csv file
-center_df.to_csv('./tracks_centers_3.csv', index=False)
+center_df.to_csv('./tracks_centers_0.csv', index=False)
 
 # plot the centers for further analysis
-centers = np.array([center_pos for circle_number, center_pos in circle_centers])
+# centers = np.array([center_pos for circle_number, center_pos in circle_centers])
+# fig = plt.figure()
+# ax = fig.add_subplot(111, projection='3d')
+# ax.scatter(centers[:, 0], centers[:, 1], centers[:, 2])
+
+pos = np.array([pos for circle_number, pos in temp_traj])
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
-ax.scatter(centers[:, 0], centers[:, 1], centers[:, 2])
+ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2])
+
 ax.set_xlabel('X')
 ax.set_ylabel('Y')
 ax.set_zlabel('Z')
