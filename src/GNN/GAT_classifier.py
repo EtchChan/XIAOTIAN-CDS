@@ -9,6 +9,7 @@ updateDate: 2024-10-13
 import os
 import math
 import numpy as np
+import pandas as pd
 import torch
 from torch_geometric.data import Data, Dataset
 from torch_geometric.nn import GATConv
@@ -20,6 +21,15 @@ from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
 import seaborn as sns
 import matplotlib.pyplot as plt
+
+from src.utils.data_preprocess import extract_event_2_data_from_csv
+
+def xlsx_to_csv(xlsx_path):
+    data_xlsx = pd.read_excel(xlsx_path, index_col=0)
+    csv_path = xlsx_path.replace('xlsx', 'csv')
+    data_xlsx.to_csv(csv_path, encoding='utf-8')
+    return csv_path
+
 
 """
 /brief: custom dataset for drone radar track data used in the GNN model
@@ -51,10 +61,11 @@ class DroneRadarDataset(Dataset):
         # Create edge index
         num_nodes = track.shape[0]
         edge_index = []
+        step_range = 5
         for i in range(num_nodes - 1):
-            edge_index.append([i, i + 1])  # Connect to next node
-            if i < num_nodes - 2:
-                edge_index.append([i, i + 2])  # Connect to node two steps ahead
+            for step in range(1, step_range):  # Set the window size for the edges to connect as 5
+                if i + step < num_nodes:  # Check if the target node exists
+                    edge_index.append([i, i + step])
 
         # Scale the node features to avoid numerical instability
         scaler = MinMaxScaler(feature_range=(0.1, 1.1))
@@ -96,18 +107,26 @@ def load_data(data_path, batch_size=32, test_size=0.2, random_state=42):
     print(f"Node feature shape: {sample.x.shape}")
     print(f"Label: {sample.y}")
 
-    # Split dataset into train and test
-    train_indices, test_indices = train_test_split(
-        range(len(dataset)),
-        test_size=test_size,
-        random_state=random_state
-    )
+    if test_size < 1.0:
+        # Split dataset into train and test
+        train_indices, test_indices = train_test_split(
+            range(len(dataset)),
+            test_size=test_size,
+            random_state=random_state
+        )
+    else:
+        # Use the entire dataset for testing
+        train_indices = []
+        test_indices = list(range(len(dataset)))
 
     train_dataset = torch.utils.data.Subset(dataset, train_indices)
     test_dataset = torch.utils.data.Subset(dataset, test_indices)
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    if test_size < 1.0:
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    else:
+        train_loader = []
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, test_loader
@@ -165,15 +184,13 @@ def save_model_with_index(model, base_filename):
     while True:
         filename = f"{base_filename}_{index}.pth"
         full_path = os.path.join(current_dir, filename)
-
         if not os.path.exists(full_path):
             torch.save(model, full_path)
             print(f"Model saved as: {filename}")
             break
-
         index += 1
 
-        return full_path
+    return full_path
 
 
 """
@@ -301,7 +318,7 @@ def train_model(train_loader, test_loader, initial_model = None, num_epochs=200,
 /param: model: the trained model
         test_loader: the data loader for testing
 """
-def test_model(model, test_loader):
+def test_model(model_list, test_loader, weight_list=None):
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # model = model.to(device)
     # model.eval()
@@ -315,35 +332,44 @@ def test_model(model, test_loader):
     #     test_len += data.y.shape[0]
     # print(f"Test Accuracy(Point by Point): {correct / test_len}")
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    model.eval()
+    if weight_list is None:
+        weight_list = [1.0, 1.0, 1.0]
 
     all_graph_preds = []
     all_graph_labels = []
 
-    for data in tqdm(test_loader, desc="Testing"):
-        data = data.to(device)
-        output = model(data)
-        node_preds = output.argmax(dim=1)
+    for idx, model in enumerate(model_list):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
+        model.eval()
 
-        # Aggregate node predictions for each graph
+        # Evaluate the model on the test set
         graph_preds = []
         graph_labels = []
-        for i in range(data.num_graphs):
-            mask = data.batch == i
-            graph_pred = node_preds[mask].float().mean().item()
-            graph_label = data.y[mask].float().mean().item()
+        for data in tqdm(test_loader, desc="Testing"):
+            data = data.to(device)
+            output = model(data)
+            node_preds = output.argmax(dim=1)
 
-            graph_preds.append(1 if graph_pred >= 0.5 else 0)
-            graph_labels.append(1 if graph_label >= 0.5 else 0)
+            for i in range(data.num_graphs):
+                mask = data.batch == i
+                graph_pred = node_preds[mask].float().mean().item()
+                graph_label = data.y[mask].float().mean().item()
 
+                graph_preds.append(graph_pred * weight_list[idx] * len(model_list))
+                graph_labels.append(graph_label)
+
+        # append the graph-level predictions and labels of one model to the list
         all_graph_preds.extend(graph_preds)
         all_graph_labels.extend(graph_labels)
 
-    # Convert to numpy arrays
-    all_graph_preds = np.array(all_graph_preds)
-    all_graph_labels = np.array(all_graph_labels)
+    # calculate the final graph-level predictions and labels by simple voting
+    all_graph_preds = np.array(all_graph_preds).reshape(-1, len(model_list))
+    all_graph_labels = np.array(all_graph_labels).reshape(-1, len(model_list))
+    all_graph_preds = np.mean(all_graph_preds, axis=1)
+    all_graph_preds = np.where(all_graph_preds >= 0.5, 1, 0)
+    all_graph_labels = np.mean(all_graph_labels, axis=1)
+    all_graph_labels = np.where(all_graph_labels >= 0.5, 1, 0)
 
     # Calculate metrics
     accuracy = (all_graph_preds == all_graph_labels).mean()
@@ -377,10 +403,150 @@ def test_model(model, test_loader):
     return accuracy, precision, recall, f1
 
 
-if __name__ == '__main__':
-    data_path = '../../data/event_2/raw_tracks_graph.npy'
-    train_loader, test_loader = load_data(data_path)
-    # model, best_model = train_model(train_loader, test_loader, learning_rate=1e-3)
+def predict(model_list, data_loader, weight_list=None):
+    """
+    /brief: predict the labels of the radar track data and append the predicted labels to the data
+            the input data's label is its track index instead of the label
+            the predicted label will be appended to the data as the last column after the track index
+    """
 
-    best_model = torch.load("./best_model_1.pth")
-    test_model(best_model, test_loader)
+    if weight_list is None:
+        weight_list = [1.0, 1.0, 1.0]
+
+    all_graph_preds = []
+
+    for idx, model in enumerate(model_list):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
+        model.eval()
+
+        graph_preds = []
+        for data in tqdm(data_loader, desc="Predicting"):
+            data = data.to(device)
+            output = model(data)
+            node_preds = output.argmax(dim=1)
+
+            for i in range(data.num_graphs):
+                mask = data.batch == i
+                graph_pred = node_preds[mask].float().mean().item()
+
+                graph_preds.append(graph_pred * weight_list[idx] * len(model_list))
+
+        all_graph_preds.extend(graph_preds)
+
+    # Convert to numpy arrays
+    all_graph_preds = np.array(all_graph_preds).reshape(-1, len(model_list))
+    all_graph_preds = np.mean(all_graph_preds, axis=1)
+    all_graph_preds = np.where(all_graph_preds >= 0.5, 1, 0)
+
+    # examine if the predictions are all zeros, if they are, print invalid results
+    if np.sum(all_graph_preds) == 0:
+        print("\n!!!!!!!!\nInvalid predictions! all zeros.\n!!!!!!!!\n")
+
+    return all_graph_preds
+
+
+def append_predictions(input_csv_path, predictions):
+    # Read the CSV file
+    df = pd.read_csv(input_csv_path)
+
+    # Add a new column for predictions, initially filled with empty values
+    df['预测标签'] = ''
+
+    # Keep track of the prediction index
+    pred_idx = 0
+
+    # Keep track of whether we're in a new track
+    last_label_was_empty = True
+
+    # Iterate through the rows
+    for i in range(len(df)):
+        # Check if this row indexed (non-empty in the '航迹序号' column)
+        current_label = str(df.iloc[i]['航迹序号']).strip()
+        has_label = current_label != '' and current_label != 'nan'
+
+        if has_label and last_label_was_empty:
+            # This is the first row of a new track
+            # Add the prediction here
+            if pred_idx < len(predictions):
+                df.at[i, '预测标签'] = predictions[pred_idx]
+                pred_idx += 1
+
+        last_label_was_empty = not has_label
+
+    output_path = input_csv_path.replace('.csv', '_with_predictions.csv')
+    # Save the modified dataframe to a new CSV file
+    df.to_csv(output_path, index=False)
+
+
+"""
+/brief: merge drone data(label 1) from the preliminary dataset to finals dataset for fine-tuning
+        cause there are too few drone instances in the finals dataset
+"""
+def construct_merged_dataset(preliminary_data_path, finals_data_path):
+    # Read the npy files
+    preliminary_data = np.load(preliminary_data_path, allow_pickle=True)
+    finals_data = np.load(finals_data_path, allow_pickle=True)
+
+    # Extract the drone data from the preliminary dataset
+    drone_data = []
+    for track, label, track_len in preliminary_data:
+        if label == 1:
+            drone_data.append((track, label, track_len))
+
+    # Merge the drone data with the finals dataset
+    merged_data = np.concatenate((finals_data, drone_data), axis=0)
+
+    # Save the merged dataset to a new npy file
+    merged_data_path = finals_data_path.replace('.npy', '_merged.npy')
+    np.save(merged_data_path, merged_data)
+
+    return merged_data_path
+
+
+if __name__ == '__main__':
+    # # Pretrain the model and validate it
+    # data_path = '../../data/event_2/Train_Preliminary.csv'
+    # npy_path = extract_event_2_data_from_csv(data_path)
+    # train_loader, test_loader = load_data(npy_path, test_size=0.1)
+    # _, best_model = train_model(train_loader, test_loader, learning_rate=1e-3, tolerance=20)
+    #
+    # # Fine-tune the model with the finals dataset
+    # data_path = '../../data/event_2/Train_Finals.csv'
+    # npy_path = extract_event_2_data_from_csv(data_path)
+    # train_loader, test_loader = load_data(npy_path, test_size=0.05)
+    # _, best_model = train_model(train_loader, test_loader, initial_model=best_model, learning_rate=5e-4, tolerance=20)
+
+    # fine-tune the model with the merged dataset
+    # preliminary_data_path = '../../data/event_2/Train_Preliminary_tracks_graph.npy'
+    # finals_data_path = '../../data/event_2/Train_Finals_tracks_graph.npy'
+    # merged_data_path = construct_merged_dataset(preliminary_data_path, finals_data_path)
+    # train_loader, test_loader = load_data(merged_data_path, test_size=0.1)
+    # checkpoint_model = torch.load("./best_model_3.pth")
+    # _, best_model = train_model(train_loader, test_loader, initial_model=checkpoint_model, learning_rate=5e-4, tolerance=20)
+
+    # compose the model list for ensemble learning
+    model_list = []
+    best_model = torch.load("./best_model_2.pth")  # balance one
+    model_list.append(best_model)
+    best_model = torch.load("./best_model_3.pth")  # less false alarm
+    model_list.append(best_model)
+    best_model = torch.load("./best_model_4.pth")  # sensitive one (more false alarm but)
+    model_list.append(best_model)
+    # assign weight to the models
+    weight_list = [0.7, 0.2, 0.1]  # balance one, less false alarm, sensitive one, sum up to 1.0
+
+    # Test the model
+    # data_path = '../../data/event_2/Train_Finals_tracks_graph.npy'
+    # _, test_loader = load_data(data_path, test_size=1.0)
+    # test_model(model_list, test_loader)
+
+    # output predictions
+    data_path = '../../data/event_2/Test_Finals.csv'
+    npy_path = extract_event_2_data_from_csv(data_path)
+    _, test_loader = load_data(npy_path, test_size=1.0)
+    predictions = predict(model_list, test_loader)
+    append_predictions(data_path, predictions)
+
+    # best_model = torch.load("./best_model_1.pth")
+    # test_model(best_model, test_loader)

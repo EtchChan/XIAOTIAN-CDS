@@ -18,7 +18,7 @@ def spherical_to_cartesian(distance, azimuth_deg, elevation_deg):
     return x, y, z
 
 # Step 1: Data Preprocessing
-data = pd.read_csv('../../data/event_1/raw_tracks_3.csv', skiprows=1)
+data = pd.read_csv('../../data/event_1/raw_tracks_2.csv', skiprows=1)
 data.columns = ['time', 'distance', 'azimuth', 'elevation', 'radial_speed', 'circle']
 
 # Step 2: Initial Detection and Clustering
@@ -136,7 +136,7 @@ for circle_number, center_pos in circle_centers:
 # save the centers into csv file for further analysis
 center_df = pd.DataFrame(circle_centers, columns=['circle', 'center_position'])
 # add header to the csv file
-center_df.to_csv('./tracks_centers_3.csv', index=False)
+center_df.to_csv('./tracks_centers_2.csv', index=False)
 
 # plot the centers for further analysis
 centers = np.array([center_pos for circle_number, center_pos in circle_centers])
