@@ -327,6 +327,7 @@ def update_vel(*args):
         print("BAD update_vel inputs!/nDo nothing")
         return args
 
+
 ## TODO 如果点实在是太少的话，可以考虑把 trajectory ID 设置为 -1，表示噪声
 def process(data, threshold=(1, 20)):
     global first_loop_index
@@ -400,6 +401,20 @@ def process(data, threshold=(1, 20)):
 
     return accumulate
 
+# 使用函数修饰符可能会减少重构代价
+# 时间记录封装
+def time_record(func):
+    start_time = time.time()  # 记录开始时间
+    
+    
+    
+    end_time = time.time()  # 记录结束时间
+    execution_time = end_time - start_time  # 计算运行时间
+    print("运行时间：", execution_time, " s")
+
+
+def pre_process():
+    pass
 
 # TODO 增加轨迹权重，当轨迹越长，则减小最小阈值，增加最大阈值
 # TODO 可以考虑增加速度滤波，大部分噪声的速度都很小，可以通过速度的大小来过滤噪声

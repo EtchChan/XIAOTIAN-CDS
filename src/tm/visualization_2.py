@@ -158,7 +158,7 @@ def plot_graph(df, plot_title):
 if __name__ == "__main__":
     # Load the Excel file
     threshold = (6, 45, 200, 0)
-    # file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx"  # Update this to the correct file path
+    file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx"  # Update this to the correct file path
     # file_path = "./output/output.xlsx"  # Update this to the correct file path
     # file_path = "./output/output2.xlsx"  # Update this to the correct file path
     # file_path = "./output/output3.xlsx"  # Update this to the correct file path
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     # file_path = f"./output/kalman_results_dataset3_{threshold[0]}_{threshold[1]}.xlsx"
     
     
-    file_path = f"./output/filtered/kalman_results_dataset2_{threshold[0]}_{threshold[1]}_{threshold[2]}_{threshold[3]}_filtered.xlsx"
+    # file_path = f"./output/filtered/kalman_results_dataset2_{threshold[0]}_{threshold[1]}_{threshold[2]}_{threshold[3]}_filtered.xlsx"
     
     plot_title = "点迹数据-1，群规模为：1"
     print("输入文件：", file_path)
