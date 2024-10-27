@@ -1,6 +1,18 @@
 # XIAOTIAN-CDS
 XiaoTian Counter Drone System: A Drone-oriented ML-based System for Radar Target Classification and Tracking
 
+## 测试说明
+### 环境配置
+在conda命令行通过以下命令配置
+cd到environment.yml所在路径
+conda env update -f environment.yml
+
+### 代码运行
+环境安装完毕后，将XIAOTIAN-CDS作为project打开
+打开项目文件中的XIAOTIAN-CDS/src/GNN/GAT_classifier.py
+将入口 if __name__ == '__main__': 下未被注释掉的代码，输入输出路径改为自己的输入输出路径
+运行 GAT_classifier.py即可获得输出
+
 ## Update
 **2024/09/18**
 

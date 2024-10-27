@@ -127,6 +127,8 @@ dependencies:
   - grpcio=1.51.1=py38hc5c6c70_1
   - gst-plugins-base=1.22.3=hfc3ed34_1
   - gstreamer=1.22.3=h1779075_1
+  - gym=0.26.1=py38h23ba278_0
+  - gym-notices=0.0.8=pyhd8ed1ab_0
   - gymnasium=0.28.1=py38had7cd75_0
   - h11=0.14.0=py38haa95532_0
   - h5py=2.10.0=py38h5e291fa_0

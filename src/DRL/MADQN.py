@@ -10,6 +10,14 @@ import torch.optim as optim
 from collections import deque
 import random
 
+from sympy.physics.units import velocity
+
+from src.GNN.GAT_classifier import predict
+
+# detect if GPU is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 # ==========================
 # Data Preprocessing
 # ==========================
@@ -20,6 +28,11 @@ def load_data(filepath):
 
     # Convert column names to English for ease of use
     data.columns = ['Time', 'SlantRange', 'Azimuth', 'Elevation', 'RadialVelocity', 'Circle']
+
+    # calculate the x, y, z coordinates and add them to the dataframe
+    data['X'] = data['SlantRange'] * np.cos(np.radians(data['Azimuth'])) * np.cos(np.radians(data['Elevation']))
+    data['Y'] = data['SlantRange'] * np.sin(np.radians(data['Azimuth'])) * np.cos(np.radians(data['Elevation']))
+    data['Z'] = data['SlantRange'] * np.sin(np.radians(data['Elevation']))
 
     return data
 
@@ -32,19 +45,19 @@ class RadarTrackingEnv(gym.Env):
         super(RadarTrackingEnv, self).__init__()
 
         self.data = data
-        self.unique_times = self.data['Time'].unique()
-        self.current_time_index = 0
-        self.max_time_index = len(self.unique_times) - 1
+        self.unique_circles = self.data['Circle'].unique()
+        self.current_circle_index = 0
+        self.max_circle_index = len(self.unique_circles) - 1
 
         # Define maximum number of tracks and detections
         self.max_tracks = 10
-        self.max_detections = 20
+        self.max_detections = 300
 
         # Define action and observation spaces
-        # Action space: For each detection, assign it to a track or start a new track
+        # Action space: For detections in the current circle, pick one and assign to a track or start a new track
         self.action_space = spaces.MultiDiscrete([self.max_tracks + 1] * self.max_detections)
 
-        # Observation space: Positions and velocities of detections and tracks
+        # Observation space: Positions, velocities and time stamps of detections and tracks
         self.observation_space = spaces.Dict({
             'detections': spaces.Box(low=-np.inf, high=np.inf, shape=(self.max_detections, 5), dtype=np.float32),
             'tracks': spaces.Box(low=-np.inf, high=np.inf, shape=(self.max_tracks, 5), dtype=np.float32),
@@ -55,16 +68,16 @@ class RadarTrackingEnv(gym.Env):
         self.track_id_counter = 0
 
     def reset(self):
-        self.current_time_index = 0
+        self.current_circle_index = 0
         self.tracks = {}
         self.track_id_counter = 0
 
         return self._get_observation()
 
     def _get_observation(self):
-        current_time = self.unique_times[self.current_time_index]
-        detections = self.data[self.data['Time'] == current_time]
-        detection_states = detections[['SlantRange', 'Azimuth', 'Elevation', 'RadialVelocity', 'Circle']].values
+        current_circle = self.unique_circles[self.current_circle_index]
+        detections = self.data[self.data['Circle'] == current_circle]
+        detection_states = detections[['X', 'Y', 'Z', 'RadialVelocity', 'Time']].values
 
         # Pad or truncate detections to max_detections
         if len(detection_states) < self.max_detections:
@@ -88,9 +101,9 @@ class RadarTrackingEnv(gym.Env):
 
     def step(self, action):
         # Get current detections
-        current_time = self.unique_times[self.current_time_index]
-        detections = self.data[self.data['Time'] == current_time]
-        detection_states = detections[['SlantRange', 'Azimuth', 'Elevation', 'RadialVelocity', 'Circle']].values
+        current_circle = self.unique_circles[self.current_circle_index]
+        detections = self.data[self.data['Circle'] == current_circle]
+        detection_states = detections[['X', 'Y', 'Z', 'RadialVelocity', 'Time']].values
 
         # Apply action
         reward = self._compute_reward(action, detection_states)
@@ -99,8 +112,8 @@ class RadarTrackingEnv(gym.Env):
         self._update_tracks(action, detection_states)
 
         # Move to next time step
-        self.current_time_index += 1
-        done = self.current_time_index >= self.max_time_index
+        self.current_circle_index += 1
+        done = self.current_circle_index >= self.max_circle_index
 
         if not done:
             obs = self._get_observation()
@@ -118,40 +131,55 @@ class RadarTrackingEnv(gym.Env):
                 break  # No more detections
 
             detection = detection_states[i]
-            assigned_track = track_assignment
+            assigned_track = track_assignment.item()
 
             # If assigned to an existing track
-            if assigned_track < len(self.tracks):
-                track_ids = list(self.tracks.keys())
-                if assigned_track >= len(track_ids):
-                    continue  # Invalid track assignment
+            if assigned_track < self.max_tracks:
+                if assigned_track > len(self.tracks):
+                    # create a new track
+                    track_id = self.track_id_counter
+                    self.track_id_counter += 1
+                    self.tracks[track_id] = detection
+                    reward -= 5.0  # Penalize creating new tracks to avoid arbitrary track creation
+                else:
+                    track_ids = list(self.tracks.keys())
+                    if assigned_track >= len(track_ids):
+                        continue  # Invalid track assignment
 
-                track_id = track_ids[assigned_track]
-                previous_state = self.tracks[track_id]
+                    track_id = track_ids[assigned_track]
+                    previous_state = self.tracks[track_id]
 
-                # Compute predicted state (simple linear prediction)
-                predicted_state = previous_state  # For simplicity; can use motion model
+                    # gain reward for maintaining existing tracks
+                    reward += 5.0
 
-                # Compute distance between detection and predicted track state
-                position_distance = np.linalg.norm(detection[:3] - predicted_state[:3])
-                velocity_difference = np.abs(detection[3] - predicted_state[3])
+                    # Compute distance between detection and predicted track state
+                    dt = detection[4] - previous_state[4]
+                    tolerance_range = previous_state[3] * dt * 10.0  # Tolerance range based on velocity
+                    position_distance = np.linalg.norm(detection[:3] - previous_state[:3])
+                    velocity_difference = np.abs(detection[3] - previous_state[3])
 
-                # Compute reward
-                reward -= position_distance  # Reward closer detections
-                reward -= velocity_difference * 0.5  # Penalize large velocity changes
-
-                # Penalize unphysical movements
-                if position_distance > 100:  # Distance threshold
-                    reward -= 20
-                if velocity_difference > 10:  # Velocity threshold
-                    reward -= 10
+                    # Compute reward
+                    # Reward closer detections
+                    if position_distance > tolerance_range:
+                        if position_distance < 200: # Distance threshold
+                            reward -= position_distance * 0.1  # Penalize distance
+                        else:
+                            reward -= (20 + position_distance * 0.15) # Penalize unphysical distances
+                    else:
+                        reward += 1.5 # Reward similar positions
+                    # Reward similar velocities
+                    if velocity_difference > 10:  # Velocity threshold
+                        reward -= (15.0 + velocity_difference * 1.5)# Penalize large velocity differences
+                    elif velocity_difference > 5:
+                        reward -= velocity_difference * 0.5  # Penalize large velocity changes
+                    else:
+                        reward += 1.0  # Reward similar velocities
             else:
-                # Start a new track
-                # Penalize creating too many new tracks
-                reward -= 5
+                # consider the point as noise
+                reward += 15.0  # encourage ignoring noise
 
         # Small positive reward for each maintained track
-        reward += len(self.tracks) * 0.1
+        reward += len(self.tracks) * 0.8
 
         return reward
 
@@ -168,19 +196,23 @@ class RadarTrackingEnv(gym.Env):
             assigned_track = track_assignment
 
             # If assigned to an existing track
-            if assigned_track < len(self.tracks):
-                track_ids = list(self.tracks.keys())
-                if assigned_track >= len(track_ids):
-                    continue  # Invalid track assignment
+            if assigned_track < self.max_tracks:
+                if assigned_track > len(self.tracks):
+                    # create a new track
+                    track_id = self.track_id_counter
+                    self.track_id_counter += 1
+                    self.tracks[track_id] = detection
+                else:
+                    track_ids = list(self.tracks.keys())
+                    if assigned_track >= len(track_ids):
+                        continue  # Invalid track assignment
 
-                track_id = track_ids[assigned_track]
-                # Update track state with the new detection
-                updated_tracks[track_id] = detection
+                    track_id = track_ids[assigned_track]
+                    # Update track state with the new detection
+                    updated_tracks[track_id] = detection
             else:
-                # Start a new track
-                track_id = self.track_id_counter
-                self.track_id_counter += 1
-                updated_tracks[track_id] = detection
+                # consider the point as noise, just pass it
+                pass
 
         # Update tracks with the new states
         self.tracks = updated_tracks
@@ -190,12 +222,12 @@ class RadarTrackingEnv(gym.Env):
 # ==========================
 
 class DQNAgent(nn.Module):
-    def __init__(self, state_size, action_size, n_heads=4):
+    def __init__(self, detection_size, track_size, action_size, n_heads=4):
         super(DQNAgent, self).__init__()
 
-        self.detection_input_dim = state_size // 2
-        self.track_input_dim = state_size // 2
-        self.embedding_dim = 128
+        self.detection_input_dim = detection_size * 5
+        self.track_input_dim = track_size * 5
+        self.embedding_dim = 64
 
         # Embedding layers
         self.detection_embedding = nn.Linear(self.detection_input_dim, self.embedding_dim)
@@ -204,10 +236,11 @@ class DQNAgent(nn.Module):
         # Multi-Head Attention
         self.multihead_attention = nn.MultiheadAttention(embed_dim=self.embedding_dim, num_heads=n_heads, batch_first=True)
 
+        hidden_dim = 64
         # Fully connected layers after attention
-        self.fc1 = nn.Linear(self.embedding_dim, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.out = nn.Linear(128, action_size *  self.action_per_detection())
+        self.fc1 = nn.Linear(self.embedding_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.out = nn.Linear(hidden_dim, detection_size *  self.action_per_detection())
 
     def action_per_detection(self):
         # Since each detection can be assigned to one of the tracks or a new track
@@ -254,7 +287,7 @@ class DQNAgent(nn.Module):
 # Training Function
 # ==========================
 
-def train_agent(env, agent, episodes=50):
+def train_agent(env, agent, episodes=50, tolerance=30):
     optimizer = optim.Adam(agent.parameters(), lr=1e-4)
     criterion = nn.MSELoss()
     replay_buffer = deque(maxlen=5000)
@@ -264,6 +297,10 @@ def train_agent(env, agent, episodes=50):
     epsilon_decay = 0.995
     epsilon_min = 0.01
 
+    # Early stopping parameters
+    best_reward = -np.inf
+    patience = 0
+
     for episode in range(episodes):
         state = env.reset()
         total_reward = 0
@@ -272,13 +309,21 @@ def train_agent(env, agent, episodes=50):
         while not done:
             # Epsilon-greedy action selection
             if np.random.rand() <= epsilon:
-                # Random action
-                action = np.random.randint(0, env.max_tracks + 1, size=env.max_detections)
+                # Random action, confine num of points picked to the max number of tracks
+                # initialize the action with all max_tracks
+                action = np.full(env.max_detections, env.max_tracks)
+                # then randomly assign some points to the tracks
+                for i in range(env.max_detections):
+                    if np.random.rand() < env.max_tracks * 3 / env.max_detections:
+                        action[i] = np.random.randint(env.max_tracks)
             else:
                 # Use the DQN to get action
                 # Prepare state tensors
                 detections = torch.FloatTensor(state['detections']).unsqueeze(0)  # Shape: (1, max_detections, 5)
                 tracks = torch.FloatTensor(state['tracks']).unsqueeze(0)  # Shape: (1, max_tracks, 5)
+                # if gpu is available, move the tensors to gpu
+                detections = detections.to(device)
+                tracks = tracks.to(device)
                 state_tensor = {'detections': detections, 'tracks': tracks}
 
                 q_values = agent(state_tensor)  # Shape: (1, max_detections, num_actions_per_detection)
@@ -286,6 +331,7 @@ def train_agent(env, agent, episodes=50):
 
                 # Select actions with highest Q-value for each detection
                 action = q_values.argmax(dim=1).cpu().numpy()
+
 
             # Take action
             next_state, reward, done, _ = env.step(action)
@@ -300,14 +346,32 @@ def train_agent(env, agent, episodes=50):
                 states_batch, actions_batch, rewards_batch, next_states_batch, dones_batch = zip(*batch)
 
                 # Prepare tensors
-                state_detections = torch.FloatTensor([s['detections'] for s in states_batch])
-                state_tracks = torch.FloatTensor([s['tracks'] for s in states_batch])
-                next_state_detections = torch.FloatTensor([ns['detections'] if ns is not None else np.zeros_like(s['detections']) for s, ns in zip(states_batch, next_states_batch)])
-                next_state_tracks = torch.FloatTensor([ns['tracks'] if ns is not None else np.zeros_like(s['tracks']) for s, ns in zip(states_batch, next_states_batch)])
+                # state_detections = torch.FloatTensor([s['detections'] for s in states_batch])
+                # state_tracks = torch.FloatTensor([s['tracks'] for s in states_batch])
+                # next_state_detections = torch.FloatTensor([ns['detections'] if ns is not None else np.zeros_like(s['detections']) for s, ns in zip(states_batch, next_states_batch)])
+                # next_state_tracks = torch.FloatTensor([ns['tracks'] if ns is not None else np.zeros_like(s['tracks']) for s, ns in zip(states_batch, next_states_batch)])
+
+                # before convert to tensor, convert the list to np array to make the conversion more efficient
+                state_detections = torch.FloatTensor(np.array([s['detections'] for s in states_batch]))
+                state_tracks = torch.FloatTensor(np.array([s['tracks'] for s in states_batch]))
+                next_state_detections = np.array([ns['detections'] if ns is not None else np.zeros_like(s['detections']) for s, ns in zip(states_batch, next_states_batch)])
+                next_state_tracks = np.array([ns['tracks'] if ns is not None else np.zeros_like(s['tracks']) for s, ns in zip(states_batch, next_states_batch)])
+                next_state_detections = torch.FloatTensor(next_state_detections)
+                next_state_tracks = torch.FloatTensor(next_state_tracks)
 
                 actions_tensor = torch.LongTensor(actions_batch)  # Shape: (batch_size, max_detections)
                 rewards_tensor = torch.FloatTensor(rewards_batch)
                 dones_tensor = torch.FloatTensor(dones_batch)
+
+                # if gpu is available, move the tensors to gpu
+                state_detections = state_detections.to(device)
+                state_tracks = state_tracks.to(device)
+                next_state_detections = next_state_detections.to(device)
+                next_state_tracks = next_state_tracks.to(device)
+                actions_tensor = actions_tensor.to(device)
+                rewards_tensor = rewards_tensor.to(device)
+                dones_tensor = dones_tensor.to(device)
+
 
                 # Compute Q-values
                 q_values = agent({'detections': state_detections, 'tracks': state_tracks})  # Shape: (batch_size, max_detections, num_actions_per_detection)
@@ -333,7 +397,18 @@ def train_agent(env, agent, episodes=50):
         if epsilon > epsilon_min:
             epsilon *= epsilon_decay
 
-        print(f"Episode {episode+1}/{episodes}, Total Reward: {total_reward}, Epsilon: {epsilon:.4f}")
+        print(f"Episode {episode + 1}/{episodes}, Total Reward: {total_reward}, Epsilon: {epsilon:.4f}")
+
+        if total_reward > best_reward:
+            best_reward = total_reward
+            patience = tolerance
+        else:
+            patience -= 1
+            if patience == 0:
+                print(f"Early stopping at episode {episode+1}/{episodes}")
+                break
+
+
 
 # ==========================
 # Evaluation Function
@@ -349,6 +424,10 @@ def evaluate_agent(env, agent):
         # Prepare state tensors
         detections = torch.FloatTensor(state['detections']).unsqueeze(0)  # Shape: (1, max_detections, 5)
         tracks = torch.FloatTensor(state['tracks']).unsqueeze(0)  # Shape: (1, max_tracks, 5)
+
+        # if gpu is available, move the tensors to gpu
+        detections = detections.to(device)
+        tracks = tracks.to(device)
         state_tensor = {'detections': detections, 'tracks': tracks}
 
         q_values = agent(state_tensor)  # Shape: (1, max_detections, num_actions_per_detection)
@@ -361,7 +440,7 @@ def evaluate_agent(env, agent):
         next_state, reward, done, _ = env.step(action)
 
         # Store tracking results
-        current_time = env.unique_times[env.current_time_index - 1]
+        current_circle = env.unique_circles[env.current_circle_index - 1]
         for i, track_assignment in enumerate(action):
             if i >= len(state['detections']):
                 break
@@ -378,23 +457,31 @@ def evaluate_agent(env, agent):
                 if track_id not in tracks_output:
                     tracks_output[track_id] = []
                 tracks_output[track_id].append({
-                    'Time': current_time,
-                    'SlantRange': detection[0],
-                    'Azimuth': detection[1],
-                    'Elevation': detection[2],
+                    'Time': detection[4],
+                    'SlantRange': np.linalg.norm(detection[:3]),
+                    'Azimuth': np.degrees(np.arctan2(detection[1], detection[0])),
+                    'Elevation': np.degrees(np.arcsin(detection[2] / np.linalg.norm(detection[:3]))),
                     'RadialVelocity': detection[3],
-                    'Circle': detection[4]
+                    'X': detection[0],
+                    'Y': detection[1],
+                    'Z': detection[2],
+                    'Group_Size': 0,
+                    'Circle': current_circle,
+                    'Track_ID': track_id
                 })
 
         state = next_state
 
-    # Output the tracking results
-    print("Tracking Results:")
-    for track_id, observations in tracks_output.items():
-        print(f"Track ID: {track_id}")
-        for obs in observations:
-            print(obs)
-        print("----")
+    # Output the tracking results into a csv file
+    tracks_df = pd.DataFrame()
+    for track_id, track_data in tracks_output.items():
+        track_df = pd.DataFrame(track_data)
+        tracks_df = pd.concat([tracks_df, track_df])
+
+    # sort the dataframe by time
+    tracks_df = tracks_df.sort_values(by='Time')
+
+    tracks_df.to_csv('./tracks_output.csv', index=False)
 
 # ==========================
 # Main Execution
@@ -412,10 +499,10 @@ if __name__ == '__main__':
     action_size = env.max_tracks + 1  # For each detection, assign to a track or start a new one
 
     # Initialize agent
-    agent = DQNAgent(state_size=state_size, action_size=action_size)
+    agent = DQNAgent(detection_size=env.max_detections, track_size=env.max_tracks, action_size=action_size).to(device)
 
     # Train the agent
-    train_agent(env, agent, episodes=10)
+    train_agent(env, agent, episodes=300, tolerance=50)  # You can increase the number of episodes
 
     # Evaluate the agent
     evaluate_agent(env, agent)

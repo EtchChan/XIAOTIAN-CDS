@@ -8,6 +8,8 @@ updateDate: 2024-10-13
 """
 import os
 import math
+from operator import is_not
+
 import numpy as np
 import pandas as pd
 import torch
@@ -442,14 +444,12 @@ def predict(model_list, data_loader, weight_list=None):
     # examine if the predictions are all zeros, if they are, print invalid results
     if np.sum(all_graph_preds) == 0:
         print("\n!!!!!!!!\nInvalid predictions! all zeros.\n!!!!!!!!\n")
+    print("num of ones in the predictions: ", np.sum(all_graph_preds))
 
     return all_graph_preds
 
 
-def append_predictions(input_csv_path, predictions):
-    # Read the CSV file
-    df = pd.read_csv(input_csv_path)
-
+def append_predictions(df, predictions, output_dir):
     # Add a new column for predictions, initially filled with empty values
     df['预测标签'] = ''
 
@@ -461,8 +461,9 @@ def append_predictions(input_csv_path, predictions):
 
     # Iterate through the rows
     for i in range(len(df)):
-        # Check if this row indexed (non-empty in the '航迹序号' column)
-        current_label = str(df.iloc[i]['航迹序号']).strip()
+        # Check if this row indexed (non-empty in the 7th column)
+        # Convert to string and strip whitespace, handle NaN values
+        current_label = str(df.iloc[i][6]).strip()
         has_label = current_label != '' and current_label != 'nan'
 
         if has_label and last_label_was_empty:
@@ -474,9 +475,10 @@ def append_predictions(input_csv_path, predictions):
 
         last_label_was_empty = not has_label
 
-    output_path = input_csv_path.replace('.csv', '_with_predictions.csv')
-    # Save the modified dataframe to a new CSV file
-    df.to_csv(output_path, index=False)
+    # Save the modified dataframe to a new Excel file
+    df.to_excel(output_path, index=False)
+
+    return output_path
 
 
 """
@@ -504,6 +506,74 @@ def construct_merged_dataset(preliminary_data_path, finals_data_path):
     return merged_data_path
 
 
+def process_dataframe_to_npy(df):
+    data_track_list = []  # N * ([L, 6] + [1] + [1]), record the data of N tracks
+    track = []  # [L, 6], record the data of a track
+    last_label = None  # keep the label of the last track
+    cnt = 0  # count the number of radar points in last track
+    num_of_tracks = 0  # count the number of tracks
+
+    # Ensure the DataFrame is not empty
+    if df.empty:
+        raise ValueError("Input DataFrame is empty")
+
+    # Iterate through DataFrame rows
+    for index, row in df.iterrows():
+        try:
+            # Improved label checking
+            current_label = str(row[6]).strip()  # Convert to string and remove whitespace
+
+            # Better check for empty or NaN labels
+            is_empty_label = (
+                    current_label == '' or
+                    current_label.lower() == 'nan' or
+                    pd.isna(current_label) or
+                    current_label == 'None'
+            )
+
+            # Convert numeric values to float, handling potential NaN/empty values
+            radar_point = [float(row[i]) if pd.notnull(row[i]) else 0.0 for i in range(6)]
+
+            # If this is a new track (has a valid label)
+            if not is_empty_label:
+                # If there was a previous track, save it
+                if last_label is not None and track:
+                    data_track_list.append([np.array(track), last_label, cnt])
+                    track = []
+
+                # Start new track
+                cnt = 1
+                last_label = int(current_label)
+                track = [radar_point]
+                num_of_tracks += 1
+
+            # If this is continuation of current track
+            elif last_label is not None:
+                track.append(radar_point)
+                cnt += 1
+
+        except Exception as e:
+            print(f"Error processing row {index}: {e}")
+            continue
+
+    # Add the last track if it exists
+    if track and last_label is not None:
+        data_track_list.append([np.array(track), last_label, cnt])
+
+    # Check if we have any tracks
+    if not data_track_list:
+        raise ValueError("No valid tracks found in the DataFrame")
+
+    # Convert to numpy array
+    data_track_list = np.array(data_track_list, dtype=object)
+
+    # Save the data to npy file
+    output_path = './converted_data.npy'
+    np.save(output_path, data_track_list)
+
+    return output_path
+
+
 if __name__ == '__main__':
     # # Pretrain the model and validate it
     # data_path = '../../data/event_2/Train_Preliminary.csv'
@@ -526,6 +596,32 @@ if __name__ == '__main__':
     # _, best_model = train_model(train_loader, test_loader, initial_model=checkpoint_model, learning_rate=5e-4, tolerance=20)
 
     # compose the model list for ensemble learning
+    # model_list = []
+    # best_model = torch.load("./best_model_2.pth")  # balance one
+    # model_list.append(best_model)
+    # best_model = torch.load("./best_model_3.pth")  # less false alarm
+    # model_list.append(best_model)
+    # best_model = torch.load("./best_model_4.pth")  # sensitive one (more false alarm but)
+    # model_list.append(best_model)
+    # # assign weight to the models
+    # weight_list = [0.11, 0.71, 0.18]  # balance one, less false alarm, sensitive one, sum up to 1.0
+
+    # Test the model
+    # data_path = '../../data/event_2/Train_Finals.csv'
+    # npy_path = extract_event_2_data_from_csv(data_path)
+    # _, test_loader = load_data(npy_path, test_size=1.0)
+    # test_model(model_list, test_loader, weight_list)
+
+    # output predictions
+    # data_path = '../../data/event_2/Test_Finals.csv'
+    # npy_path = extract_event_2_data_from_csv(data_path)
+    # _, test_loader = load_data(npy_path, test_size=1.0)
+    # predictions = predict(model_list, test_loader, weight_list)
+    # append_predictions(data_path, predictions)
+
+
+    # code snippet for running the model on the test set
+    # load models and compose the model list and weight list
     model_list = []
     best_model = torch.load("./best_model_2.pth")  # balance one
     model_list.append(best_model)
@@ -534,19 +630,14 @@ if __name__ == '__main__':
     best_model = torch.load("./best_model_4.pth")  # sensitive one (more false alarm but)
     model_list.append(best_model)
     # assign weight to the models
-    weight_list = [0.7, 0.2, 0.1]  # balance one, less false alarm, sensitive one, sum up to 1.0
+    weight_list = [0.11, 0.71, 0.18]  # balance one, less false alarm, sensitive one, sum up to 1.0
+    # adjust the weight list to balance the false alarm and missing alarm for different conditions
 
-    # Test the model
-    # data_path = '../../data/event_2/Train_Finals_tracks_graph.npy'
-    # _, test_loader = load_data(data_path, test_size=1.0)
-    # test_model(model_list, test_loader)
-
-    # output predictions
-    data_path = '../../data/event_2/Test_Finals.csv'
-    npy_path = extract_event_2_data_from_csv(data_path)
-    _, test_loader = load_data(npy_path, test_size=1.0)
-    predictions = predict(model_list, test_loader)
-    append_predictions(data_path, predictions)
-
-    # best_model = torch.load("./best_model_1.pth")
-    # test_model(best_model, test_loader)
+    # load data and predict
+    data_path = 'D:\Repository\XIAOTIAN-CDS\data\event_2\Test_Finals.xlsx'
+    output_path = 'D:\Repository\XIAOTIAN-CDS\data\event_2\Predictions.xlsx'
+    df = pd.read_excel(data_path, sheet_name=0)
+    input_data_path = process_dataframe_to_npy(df)
+    _, test_loader = load_data(input_data_path, test_size=1.0)
+    predictions = predict(model_list, test_loader, weight_list)
+    append_predictions(df, predictions, output_path)
