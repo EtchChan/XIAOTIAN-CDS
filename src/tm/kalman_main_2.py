@@ -1,8 +1,7 @@
 ###
 # python=3.8.5
-# version=0.0.2
+# version=0.1.0
 # workspace_root=$(project_root)
-# This shit version is also in a MASS!
 ###
 
 import pandas as pd
@@ -23,8 +22,11 @@ pd.set_option("mode.chained_assignment", None)
 # 全局变量区
 ################
 
-# 处理的总圈数，可修改，但是应当大于0
+# 处理的总圈数，可修改，但是应当大于0，并且可以超过数据中的最大圈数，若超出最大圈数，则代表所有圈数均进行处理
 total_loops = 309
+
+# 匹配阈值，可修改，但是应当符合匹配的基本要求
+threshold_top = (10, 150)
 
 # 运动学转移矩阵，可修改，但是应当符合transition matrix的基本要求
 # (x, y, z, v_x, v_y, v_z)
@@ -42,7 +44,7 @@ transition_matrix = np.array(
 # 轨迹id，可修改其初始值，但意义不大
 current_trajectory_id = 0
 
-PI2 = 2*np.pi
+PI2 = 2 * np.pi
 
 ################
 # 函数区
@@ -205,12 +207,17 @@ def predict(states_rect):
 
 
 # TODO match 和 kalman 之间可以设计一个更好的结构，用来传递匹配的结果
-def match(currents, predicts, threshold=20):
+def match(currents, predicts, threshold=(1, 20)):
     global current_trajectory_id
     for i in range(currents.shape[0]):
         # 将当前的每一个点与上一圈的普通运动学预测相比较
         distances = np.linalg.norm(currents[i, 1:4] - predicts[:, 1:4], axis=1)
-        if np.min(distances) < threshold:
+        if (
+            threshold[0] < np.min(distances) < threshold[1]
+            ## （特殊处理)
+            and np.linalg.norm(currents[i, 1:4]) > 200 # 斜距 200m 以上的点才匹配 ##############################
+            and currents[i, 3] > 0 # z轴大于 150m 以上才匹配
+        ):
             # 如果匹配到了，则更新当前点的轨迹ID
             temp_idx = np.argmin(distances)
             currents[i, 6] = predicts[temp_idx, 6]
@@ -319,11 +326,13 @@ def update_vel(*args):
         print("BAD update_vel inputs!/nDo nothing")
         return args
 
-
-def process(data):
+## TODO 如果点实在是太少的话，可以考虑把 trajectory ID 设置为 -1，表示噪声
+def process(data, threshold=(1, 20)):
     global total_loops
     global transition_matrix
     global current_trajectory_id
+    
+    first_loop_index = 1 #########################################
 
     # 初始化滤波器
     kf = initialize_kalman_filter()
@@ -332,7 +341,7 @@ def process(data):
     state_covariance = 1.0 * np.eye(6)
 
     # 初始帧处理，获取初始帧预测，预测根据为径向速度
-    first_loop_data = data[data["圈数"] == 1]
+    first_loop_data = data[data["圈数"] == first_loop_index] # 
     # 增加轨迹ID列，用于存储轨迹ID
     first_loop_data.loc[:, "轨迹ID"] = range(
         current_trajectory_id, current_trajectory_id + len(first_loop_data)
@@ -356,18 +365,20 @@ def process(data):
 
     # 累计记录数据
     accumulate = [np_to_pd(rect_to_polar(previous_states), mode="POLAR")]
-    
+
     # 执行普通运动学预测，这里的previous_predicts是相对于下一帧（当前帧）来说的
     previous_predicts = predict(previous_states)
 
-    for i in range(2, total_loops + 1):
+    for i in range(first_loop_index, total_loops  + first_loop_index):
         # (t, r, theta, phi, v_r, lp_idx, traj_id, v_x, v_y, v_z))
         current_loop_data_polar = pd_to_np(data[data["圈数"] == i])
         # (t, x, y, z, v_r, lp_idx, traj_id, v_x, v_y, v_z))
         current_loop_data_rect = polar_to_rect(current_loop_data_polar)
         # print(current_loop_data_rect)
         # 匹配当前帧所有点与上一帧预测，这里会加入匹配到的点的速度
-        current_after_match = match(current_loop_data_rect, previous_predicts, 75)
+        current_after_match = match(
+            current_loop_data_rect, previous_predicts, threshold
+        )
         # 通过匹配结果执行kalman滤波器更新, 匹配的结果作为卡尔曼的观测
         # 同时，在这个版本的卡尔曼中，一同完成了非匹配点的速度更新
         current_after_kalman, state_covariance = kalman_update_2(
@@ -390,17 +401,27 @@ def process(data):
     return accumulate
 
 
+# TODO 增加轨迹权重，当轨迹越长，则减小最小阈值，增加最大阈值
+# TODO 可以考虑增加速度滤波，大部分噪声的速度都很小，可以通过速度的大小来过滤噪声
+# TODO 可以考虑容忍一两帧的阈值外，否则这个强阈值要求太难了
+# TODO 考虑当前点的预测点搜索只在邻近的斜距、方位角、俯仰角范围内进行，这样可以减少计算量
 if __name__ == "__main__":
 
     start_time = time.time()  # 记录开始时间
     # 加载文件数据
-    # input_file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx" 
-    # output_file_path = "./output/kalman_results_dataset1.xlsx"
+    input_file_path = (
+        "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据1-公开提供.xlsx"
+    )
+    output_file_path = (
+        f"./output/kalman_results_dataset1_{threshold_top[0]}_{threshold_top[1]}.xlsx"
+    )
     # input_file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据2-公开提供.xlsx"
-    # output_file_path = "./output/kalman_results_dataset2.xlsx"
-    input_file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据3-公开提供.xlsx"
-    output_file_path = "./output/kalman_results_dataset3_75.xlsx"
-    
+    # output_file_path = f"./output/kalman_results_dataset2_{threshold[0]}_{threshold[1]}.xlsx"
+    # input_file_path = "../materials/赛道一：小、微无人机集群目标跟踪/点迹数据3-公开提供.xlsx"
+    # output_file_path = f"./output/kalman_results_dataset3_{threshold[0]}_{threshold[1]}.xlsx"
+
+    print("输入文件：", input_file_path)
+    print("阈值：", threshold_top)
     origin_data = pd.read_excel(input_file_path)
 
     # 选取需要处理的帧
@@ -415,14 +436,14 @@ if __name__ == "__main__":
     end_time = time.time()  # 记录结束时间
     pre_exe_time = end_time - start_time  # 计算运行时间
     print("预处理时间：", pre_exe_time, " s")
-    
+
     start_time = time.time()  # 记录开始时间
     # 处理函数入口
-    accumulate = process(selected_data)
+    accumulate = process(selected_data, threshold_top)
     end_time = time.time()  # 记录结束时间
     execution_time = end_time - start_time  # 计算运行时间
     print("运行时间：", execution_time, " s")
-    
+
     # 存储为 Excel 文件
     start_time = time.time()  # 记录开始时间
     combined = pd.concat(accumulate, ignore_index=True)
@@ -430,5 +451,5 @@ if __name__ == "__main__":
     end_time = time.time()  # 记录结束时间
     post_exe_time = end_time - start_time  # 计算运行时间
     print("后处理时间：", post_exe_time, " s")
-    
+
     print("完成！")

@@ -54,7 +54,7 @@ colors = [
 # Create traces for each cluster
 traces = []
 
-total_loops = 50  # for there is only 5 colors, this variable should be <=5
+total_loops = 15  # for there is only 5 colors, this variable should be <=5
 # Loop over the first ${total_loops} and create a separate trace for each
 for loop_number in range(1, total_loops + 1):
     loop_data = loops_data[loops_data["圈数"] == loop_number]
@@ -76,7 +76,7 @@ for loop_number in range(1, total_loops + 1):
     if total_loops == 1:
         marker_dict = dict(size=5, color=r, opacity=0.8)
     elif total_loops > 10:
-        marker_dict = dict(size=5, color=r, opacity=0.8)
+        marker_dict = dict(size=5, color=float(loop_number)/total_loops, opacity=0.8)
     else:
         marker_dict = dict(size=5, color=colors[loop_number - 1], opacity=0.8)
     trace = go.Scatter3d(
