@@ -27,6 +27,9 @@ pd.set_option("mode.chained_assignment", None)
 #
 current_trajectory_id = 0
 
+id_counter = {}
+unmatched_trajectories = {}
+
 # 运动学转移矩阵，可修改，但是应当符合transition matrix的基本要求
 # (x, y, z, v_x, v_y, v_z)
 transition_matrix = np.array(
@@ -120,9 +123,47 @@ def predict(states):
 
 
 # TODO match 和 kalman 之间可以设计一个更好的结构，用来传递匹配的结果
-def match(currents, predicts, config):
+# TODO 对每个方向单独进行匹配，而不是同时进行
+def match(currents, predicts, previous_states, config):
     global current_trajectory_id
+    global id_counter
+    global unmatched_trajectories
     threshold = config["threshold"]
+
+    # 处理未匹配的轨迹
+    for traj_id in id_counter:
+        if id_counter[traj_id] > 10 and traj_id not in currents["id"].values:
+            if (
+                traj_id not in unmatched_trajectories
+                and traj_id in predicts["id"].values
+            ):
+                unmatched_trajectories[traj_id] = {
+                    "count": 1,
+                    "coords": predicts[predicts["id"] == traj_id]
+                    .iloc[-1, 7:10]
+                    .to_numpy(),
+                    "previous": previous_states[predicts["id"] == traj_id].iloc[-1, :],
+                }
+            elif traj_id in unmatched_trajectories:
+                unmatched_trajectories[traj_id]["count"] += 1
+
+    # 将未匹配的轨迹点添加到 predicts 和 previous states 中
+    new_rows = []
+    new_states = []
+    for traj_id, data in unmatched_trajectories.items():
+        new_row = predicts.iloc[0].copy()
+        new_row[7:10] = data["coords"]
+        new_row[6] = traj_id
+        new_rows.append(new_row)
+
+        new_states.append(data["previous"])
+
+    if new_rows and new_states:
+        predicts = pd.concat([predicts, pd.DataFrame(new_rows)], ignore_index=True)
+        previous_states = pd.concat(
+            [previous_states, pd.DataFrame(new_states)], ignore_index=True
+        )
+
     for i in range(len(currents)):
         # 将当前的每一个点与上一圈的普通运动学预测相比较
         diff_np = currents.iloc[i, 7:10].to_numpy() - predicts.iloc[:, 7:10].to_numpy()
@@ -133,26 +174,49 @@ def match(currents, predicts, config):
         )
         if (
             threshold[0] < np.min(distances) < threshold[1]
+            # and 0 < np.min(np.abs(diff_np[:, 0])) < 60  #
+            # and 0 < np.min(np.abs(diff_np[:, 1])) < 20  #
+            # and 0 < np.min(np.abs(diff_np[:, 2])) < 40  #
             ## （以下均为特殊处理)
-            and currents.iloc[i, 8] < 0
+            and currents.iloc[i, 8] < 0  # y < 0
             # and diff_np < 50
             # and currents.iloc[i, 1] > threshold[2]  # 斜距 r_min 以上的点才匹配
             and currents.iloc[i, 9] > threshold[3]  # z轴大于 z_min 以上才匹配
         ):
             # 如果匹配到了，则更新当前点的轨迹ID
             temp_idx = np.argmin(distances)
-            currents.iloc[i, 6] = predicts.iloc[temp_idx, 6]
+            matched_id = predicts.iloc[temp_idx, 6]
+            currents.iloc[i, 6] = matched_id
             # 更新直角坐标系速度
             currents.iloc[i, 10:13] = (
                 currents.iloc[i, 7:10] - predicts.iloc[temp_idx, 7:10]
             ) / (currents.iloc[i, 0] - predicts.iloc[temp_idx, 0])
+            if matched_id in id_counter:
+                id_counter[matched_id] += 1
+            else:
+                id_counter[matched_id] = 1
+
+            # # 如果匹配到了，移除 unmatched_trajectories 中的记录
+            # if matched_id in unmatched_trajectories:
+            #     del unmatched_trajectories[matched_id]
+
         else:
             # 没有匹配到，说明当前的点是新出现的，添加新的ID
+
             currents.iloc[i, 6] = current_trajectory_id
             current_trajectory_id += 1
+            # 初始化新ID的计数
+            id_counter[currents.iloc[i, 6]] = 1
+
+    # 更新未匹配轨迹的计数
+    for traj_id in list(unmatched_trajectories.keys()):
+        unmatched_trajectories[traj_id]["count"] += 1
+        if unmatched_trajectories[traj_id]["count"] > 8:
+            del unmatched_trajectories[traj_id]
+
     # print("---- after match ----")
     # print(currents)
-    return currents
+    return currents, previous_states
 
 
 # 选取普通运动学预测中的邻近作为观测，更新kalman状态
@@ -233,11 +297,13 @@ def process(data, config):
         current_loop_data = data[data["loop"] == loop_index]
         # print(current_loop_data_rect)
         # 匹配当前帧所有点与上一帧预测，这里会加入匹配到的点的速度
-        current_after_match = match(current_loop_data, previous_predicts, config)
+        current_after_match, previous_states = match(
+            current_loop_data, previous_predicts, previous_states, config
+        )
         # 通过匹配结果执行kalman滤波器更新, 匹配的结果作为卡尔曼的观测
         # 同时，在这个版本的卡尔曼中，一同完成了非匹配点的速度更新
 
-        # 直接取消kalman试试
+        #
         current_after_kalman, state_covariance = kalman_update_2(
             kf,
             current_after_match,  # obs
