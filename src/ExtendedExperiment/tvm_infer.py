@@ -1,8 +1,8 @@
-import tvm
-from tvm import relay
-import onnx
-import time
-import cv2
+# import tvm
+# from tvm import relay
+# import onnx
+# import time
+# import cv2
 import numpy as np
 
 # onnx路径，需要在同级路径下保存.so .json .params文件，即编译过的onnx文件

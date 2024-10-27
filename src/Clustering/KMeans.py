@@ -5,6 +5,7 @@ from sklearn.metrics import silhouette_score
 from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 
+
 # Function to convert spherical coordinates to Cartesian coordinates
 def spherical_to_cartesian(distance, azimuth_deg, elevation_deg):
     # Convert degrees to radians
@@ -17,18 +18,18 @@ def spherical_to_cartesian(distance, azimuth_deg, elevation_deg):
     z = distance * np.sin(elevation_rad)
     return x, y, z
 
+
 # Step 1: Data Preprocessing
-# data = pd.read_csv('../../data/event_1/raw_tracks_3.csv', skiprows=1)
-data = pd.read_csv('../materials/raw_tracks_1.csv', skiprows=1)
-data.columns = ['time', 'distance', 'azimuth', 'elevation', 'radial_speed', 'circle']
+data = pd.read_csv("../../data/event_1/raw_tracks_2.csv", skiprows=1)
+data.columns = ["time", "distance", "azimuth", "elevation", "radial_speed", "circle"]
 
 # Step 2: Initial Detection and Clustering
-first_circle_data = data[data['circle'] == data['circle'].min()]
+first_circle_data = data[data["circle"] == data["circle"].min()]
 possible_n_values = range(2, 10)
 best_n = None
 best_score = -1
 best_labels = None
-position_features = first_circle_data[['distance', 'azimuth', 'elevation']].values
+position_features = first_circle_data[["distance", "azimuth", "elevation"]].values
 
 for n_clusters in possible_n_values:
     kmeans = KMeans(n_clusters=n_clusters, random_state=42)
@@ -43,6 +44,7 @@ for n_clusters in possible_n_values:
 
 print(f"Estimated number of drones: {best_n}")
 
+
 # Step 3: Track Initialization
 class Track:
     def __init__(self, id, initial_position):
@@ -53,6 +55,7 @@ class Track:
         self.F = np.eye(3)  # State transition model
         self.Q = np.eye(3) * 0.1  # Process noise covariance
         self.R = np.eye(3) * 1  # Measurement noise covariance
+
 
 tracks = []
 kmeans = KMeans(n_clusters=best_n, random_state=42)
@@ -68,12 +71,12 @@ temp_traj = []
 circle_centers = []
 
 # Step 4: Tracking Over Time and Computing Centers
-circles = sorted(data['circle'].unique())
+circles = sorted(data["circle"].unique())
 
 for circle_number in circles[1:]:
-    circle_data = data[data['circle'] == circle_number]
-    measurements = circle_data[['distance', 'azimuth', 'elevation']].values
-    time_stamps = circle_data['time'].values
+    circle_data = data[data["circle"] == circle_number]
+    measurements = circle_data[["distance", "azimuth", "elevation"]].values
+    time_stamps = circle_data["time"].values
 
     # Predict the next position for each track
     for track in tracks:
@@ -130,20 +133,20 @@ for circle_number in circles[1:]:
 
     # Store the center position with the circle number
     circle_centers.append((circle_number, center_position))
-    
-    temp_traj.append((circle_number, cartesian_positions[2,:]))
+
+    temp_traj.append((circle_number, cartesian_positions[2, :]))
 
 # After processing all circles, you can print or analyze the centers
 for circle_number, center_pos in circle_centers:
     print(f"Circle {circle_number}: Center Position (X, Y, Z) = {center_pos}")
-    
+
 for circle_number, pos in temp_traj:
     print(f"Circle {circle_number}: Center Position (X, Y, Z) = {pos}")
 
 # save the centers into csv file for further analysis
-center_df = pd.DataFrame(circle_centers, columns=['circle', 'center_position'])
+center_df = pd.DataFrame(circle_centers, columns=["circle", "center_position"])
 # add header to the csv file
-center_df.to_csv('./tracks_centers_0.csv', index=False)
+center_df.to_csv("./tracks_centers_2.csv", index=False)
 
 # plot the centers for further analysis
 # centers = np.array([center_pos for circle_number, center_pos in circle_centers])
@@ -153,11 +156,10 @@ center_df.to_csv('./tracks_centers_0.csv', index=False)
 
 pos = np.array([pos for circle_number, pos in temp_traj])
 fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
+ax = fig.add_subplot(111, projection="3d")
 ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2])
 
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
+ax.set_xlabel("X")
+ax.set_ylabel("Y")
+ax.set_zlabel("Z")
 plt.show()
-

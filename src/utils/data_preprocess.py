@@ -11,6 +11,7 @@ import csv
 import matplotlib.pyplot as plt
 import glob
 
+# from src.ExtendedExperiment.tvm_infer import output
 
 """
 /brief: padding the data to a fixed length.
@@ -176,7 +177,7 @@ def extract_event_1_data_from_csv(raw_data_folder: str, fixed_length: int = -1):
     first 1 is the label of the track, it is either 0 or 1, 0 for non-drone, 1 for drone.
     second 1 is the length of the track, it is the same as L.
 """
-def extract_event_2_data_from_csv(raw_data_path: str, fixed_length: int = -1) -> np.ndarray:
+def extract_event_2_data_from_csv(raw_data_path: str, fixed_length: int = -1):
     if -1 < fixed_length < 11:
         raise ValueError("The fixed length should be negative(no padding) or no less than 11(max_len_of_track).")
     data_track_list = [] # N * ([L, 6] + [1] + [1]), record the data of N tracks
@@ -259,11 +260,13 @@ def extract_event_2_data_from_csv(raw_data_path: str, fixed_length: int = -1) ->
 
     # save the processed data to a npy file under the same directory as the raw csv data
     if fixed_length < 0: # set the name as raw_tracks_graph.npy under the same directory
-        np.save(raw_data_path.replace('_data.csv', '_tracks_graph.npy'), data_track_list)
+        output_path = raw_data_path.replace('.csv', '_tracks_graph.npy')
+        np.save(output_path, data_track_list)
     else: # set the name as raw_data_padded.npy under the same directory
-        np.save(raw_data_path.replace('.csv', '_padded.npy'), data_track_list)
+        output_path = raw_data_path.replace('.csv', '_padded.npy')
+        np.save(output_path, data_track_list)
 
-    return data_track_list
+    return output_path
 
 
 def xlsx2csv(raw_data_path : str)-> None:
