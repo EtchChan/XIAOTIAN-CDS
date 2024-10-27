@@ -1,0 +1,8 @@
+file_name: "data_3" # 文件名
+data_type: "kalman_processed" # 是否是原始数据
+start_loop: 1 # 处理的起始圈
+end_loop: -1 # 处理的最后圈(-1就是处理到最后)
+threshold: [0, 80, 0, 150] # 阈值，表示为一个元组
+
+##
+# 5个，4个，5个
