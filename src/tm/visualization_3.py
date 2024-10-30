@@ -27,7 +27,11 @@ def plot_graph(df, config):
     # Create traces
     traces = []
 
-    if config["data_type"] in ["raw", "ransac_processed", "centers"]:
+    if config["data_type"] in [
+        "raw",
+        "ransac_processed",
+        "centers",
+    ]:
         # 如果是原始数据，不进行轨迹表示
         for loop_index in range(start_loop, end_loop + 1):
             loop_data = loops_data[loops_data["loop"] == loop_index]
@@ -69,7 +73,7 @@ def plot_graph(df, config):
     #             Refer to ransac.py for more details"
     #     )
     #     pass
-    elif config["data_type"] == "kalman_processed":
+    elif config["data_type"] in ["kalman_processed", "dbscan_processed"]:
         # 否则用轨迹
         # TODO 之后需要按照新生成数据格式来更改这一部分
         # 找到轨迹列中出现次数最多的10个轨迹
@@ -215,9 +219,9 @@ def plot_graph(df, config):
             yaxis=dict(title="Y (meters)"),
             zaxis=dict(title="Z (meters)"),
             # data_3
-            # xaxis=dict(title="X (meters)", range=[0, 4000]),
+            # xaxis=dict(title="X (meters)", range=[1000, 3000]),
             # yaxis=dict(title="Y (meters)", range=[-1000, 1000]),
-            # zaxis=dict(title="Z (meters)", range=[0, 400]),
+            # zaxis=dict(title="Z (meters)", range=[0, 2000]),
         ),
         showlegend=True,
         legend=dict(
@@ -238,7 +242,7 @@ if __name__ == "__main__":
     # config = read_config("src/tm/config/final_visual_data_1.yaml")
     # config = read_config("src/tm/config/final_visual_data_1_ransac.yaml")
     # config = read_config("src/tm/config/final_visual_data_3_filtered.yaml")
-    config = read_config("src/tm/config/final_visual_data_3_centers.yaml")
+    config = read_config("src/tm/config/final_visual_data_3_filtered.yaml")
     print("Visualization configuration:")
     print(config)
 
@@ -248,7 +252,8 @@ if __name__ == "__main__":
         file_path = f"../materials/finals/{config['file_name']}.xlsx"  # Update this to the correct file path
     elif config["data_type"] in ["kalman_processed", "centers"]:
         file_path = f"output/finals/{config['file_name']}_{config['start_loop']}_{config['end_loop']}_{config['threshold']}.xlsx"  # Update this to the correct file path
-
+    elif config["data_type"] == "dbscan_processed":
+        file_path = f"output/finals/{config['file_name']}_{config['start_loop']}_{config['end_loop']}_dbscan.xlsx"
     df = pd.read_excel(file_path)
     # 新的数据已经统一了列标准，因此这里可以不用更改
     # 列标准
